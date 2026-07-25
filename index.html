@@ -20,6 +20,7 @@
       <div id="zone-label" class="zone-label">Zona 1 — Ai margini del quartiere</div>
       <div id="wave-label" class="wave-label">Nemici rimasti: 0</div>
       <div id="weapon-label" class="weapon-label">Pugni</div>
+      <div id="bomb-label" class="weapon-label">Granata x0</div>
     </div>
     <div class="hud-right">
       <div id="money-label" class="money-label">€ 0</div>
@@ -49,6 +50,10 @@
         <div><b>Levetta dx</b> — Mira indipendente dal movimento</div>
         <div><b>Shift</b> — Scatto (schivata)</div>
         <div><b>○ (Circle)</b> — Scatto (schivata)</div>
+        <div><b>1-5</b> — Seleziona esplosivo</div>
+        <div><b>L1</b> — Seleziona esplosivo</div>
+        <div><b>G</b> — Lancia l'esplosivo selezionato</div>
+        <div><b>R1</b> — Lancia l'esplosivo selezionato</div>
         <div><b>U</b> — Potenzia casa / Pausa</div>
         <div><b>Options</b> — Potenzia casa / Pausa</div>
       </div>
@@ -62,10 +67,16 @@
         <div class="legend-item"><span class="legend-dot" style="background:#8a7355"></span><b>Balordo</b> — lento e prevedibile</div>
         <div class="legend-item"><span class="legend-dot" style="background:#e0703d"></span><b>Nervoso</b> — veloce, attacca in fretta</div>
         <div class="legend-item"><span class="legend-dot" style="background:#9b59d0"></span><b>Imprevedibile</b> — movimenti erratici, non sempre ti insegue</div>
+        <div class="legend-item"><span class="legend-dot" style="background:#5c2626"></span><b>Bruto</b> — lentissimo, ma colpisce durissimo</div>
+        <div class="legend-item"><span class="legend-dot" style="background:#4a6b7a"></span><b>Tiratore</b> — spara a distanza, evita la mischia</div>
       </div>
       <p class="desc small">
         I nemici sconfitti lasciano a volte un medikit (cura) o, se hai un'arma a distanza,
         delle munizioni. Le munizioni si possono anche comprare a fine zona.
+      </p>
+      <p class="desc small">
+        Con molti soldi puoi comprare granate, molotov, bombe adesive e granate fumogene/stordenti:
+        utili per fare danni pesanti o per sfuggire a un'orda che ti ha circondato.
       </p>
       <button id="start-btn" class="btn-primary">Entra nel quartiere</button>
     </div>
@@ -76,19 +87,32 @@
       <h2 id="upgrade-title">Potenzia casa</h2>
       <p id="upgrade-subtitle" class="tagline"></p>
 
-      <h3 class="section-title">Potenziamenti casa</h3>
+      <h3 class="section-title first">Potenziamenti casa</h3>
       <div id="upgrade-list" class="upgrade-list"></div>
 
       <h3 class="section-title">Armi da mischia</h3>
       <div id="melee-weapon-list" class="upgrade-list weapon-list"></div>
 
+      <div id="melee-weapon-upgrades-section" class="hidden">
+        <h3 class="section-title">Potenzia arma da mischia</h3>
+        <div id="melee-weapon-upgrades" class="upgrade-list weapon-list"></div>
+      </div>
+
       <h3 class="section-title">Armi a distanza</h3>
       <div id="ranged-weapon-list" class="upgrade-list weapon-list"></div>
+
+      <div id="ranged-weapon-upgrades-section" class="hidden">
+        <h3 class="section-title">Potenzia arma a distanza</h3>
+        <div id="ranged-weapon-upgrades" class="upgrade-list weapon-list"></div>
+      </div>
 
       <div id="ammo-shop-section" class="hidden">
         <h3 class="section-title">Munizioni</h3>
         <div id="ammo-shop" class="upgrade-list weapon-list"></div>
       </div>
+
+      <h3 class="section-title">Esplosivi</h3>
+      <div id="bomb-shop" class="upgrade-list weapon-list"></div>
 
       <div class="upgrade-footer">
         <div id="upgrade-money" class="money-label">€ 0</div>
@@ -109,7 +133,7 @@
     </div>
   </div>
 
-  <div id="pause-hint" class="pause-hint hidden">U: Potenzia casa · Spazio: Attacca · F: Spara · Shift: Scatto</div>
+  <div id="pause-hint" class="pause-hint hidden">U: Potenzia casa · Spazio: Attacca · F: Spara · Shift: Scatto · 1-5: Scegli esplosivo · G: Lancia</div>
 </div>
 
 <script src="script.js"></script>
