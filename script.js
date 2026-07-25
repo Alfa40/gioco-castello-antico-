@@ -72,6 +72,52 @@ const CONFIG = {
   ],
 };
 
+// Top-down game sprites (generated separately from the front-facing shop
+// portraits) are rendered on a solid black background — chroma-key it away
+// to transparency once, on load, and cache the processed canvas so draw()
+// doesn't touch pixel data every frame.
+const SPRITE_SOURCES = {
+  player: "generated-images/topdown/player.jpg",
+  balordo: "generated-images/topdown/enemy_balordo.jpg",
+  nervoso: "generated-images/topdown/enemy_nervoso.jpg",
+  imprevedibile: "generated-images/topdown/enemy_imprevedibile.jpg",
+  bruto: "generated-images/topdown/enemy_bruto.jpg",
+  tiratore: "generated-images/topdown/enemy_tiratore.jpg",
+};
+
+const Sprites = {
+  ready: {},
+  load() {
+    for (const [key, src] of Object.entries(SPRITE_SOURCES)) {
+      const img = new Image();
+      img.onload = () => { this.ready[key] = chromaKeyToCanvas(img); };
+      img.src = src;
+    }
+  },
+  get(key) {
+    return this.ready[key] || null;
+  },
+};
+
+function chromaKeyToCanvas(img) {
+  const c = document.createElement("canvas");
+  c.width = img.naturalWidth;
+  c.height = img.naturalHeight;
+  const cx = c.getContext("2d");
+  cx.drawImage(img, 0, 0);
+  const imgData = cx.getImageData(0, 0, c.width, c.height);
+  const d = imgData.data;
+  const threshold = 40; // near-black background from the generation prompt
+  for (let i = 0; i < d.length; i += 4) {
+    if (d[i] < threshold && d[i + 1] < threshold && d[i + 2] < threshold) {
+      d[i + 3] = 0;
+    }
+  }
+  cx.putImageData(imgData, 0, 0);
+  return c;
+}
+Sprites.load();
+
 const UPGRADES = [
   {
     id: "gym",
@@ -205,11 +251,11 @@ const RANGED_WEAPONS = [
 // Consumable throwables, bought in stacks (not sequential tiers) and thrown
 // along the current aim. Expensive on purpose — a panic button, not a main weapon.
 const THROWABLES = [
-  { id: "grenade", name: "Granata", desc: "Esplosione che infligge danno pesante in un'area.", cost: 150, kind: "damage", radius: 70, damage: 70, fuse: 1.1, maxCarry: 5 },
-  { id: "molotov", name: "Molotov", desc: "Crea una pozza di fuoco che brucia i nemici per qualche secondo.", cost: 180, kind: "fire", radius: 60, damagePerSecond: 22, duration: 3.5, fuse: 0.6, maxCarry: 5 },
-  { id: "sticky", name: "Bomba adesiva", desc: "Si attacca al primo nemico colpito ed esplode con danno enorme.", cost: 260, kind: "damage", radius: 55, damage: 130, fuse: 1.4, maxCarry: 4, sticky: true },
-  { id: "smoke", name: "Granata fumogena", desc: "Acceca i nemici nella zona: smettono di inseguirti per qualche secondo.", cost: 200, kind: "cc", ccType: "smoke", radius: 100, duration: 4, fuse: 0.5, maxCarry: 4 },
-  { id: "flashbang", name: "Granata stordente", desc: "Stordisce i nemici vicini, bloccandoli sul posto per qualche secondo.", cost: 220, kind: "cc", ccType: "stun", radius: 110, duration: 2.5, fuse: 0.4, maxCarry: 4 },
+  { id: "grenade", name: "Granata", desc: "Esplosione che infligge danno pesante in un'area.", cost: 1200, kind: "damage", radius: 70, damage: 70, fuse: 1.1, maxCarry: 5 },
+  { id: "molotov", name: "Molotov", desc: "Crea una pozza di fuoco che brucia i nemici per qualche secondo.", cost: 1300, kind: "fire", radius: 60, damagePerSecond: 22, duration: 3.5, fuse: 0.6, maxCarry: 5 },
+  { id: "sticky", name: "Bomba adesiva", desc: "Si attacca al primo nemico colpito ed esplode con danno enorme.", cost: 1500, kind: "damage", radius: 55, damage: 130, fuse: 1.4, maxCarry: 4, sticky: true },
+  { id: "smoke", name: "Granata fumogena", desc: "Acceca i nemici nella zona: smettono di inseguirti per qualche secondo.", cost: 1250, kind: "cc", ccType: "smoke", radius: 100, duration: 4, fuse: 0.5, maxCarry: 4 },
+  { id: "flashbang", name: "Granata stordente", desc: "Stordisce i nemici vicini, bloccandoli sul posto per qualche secondo.", cost: 1350, kind: "cc", ccType: "stun", radius: 110, duration: 2.5, fuse: 0.4, maxCarry: 4 },
 ];
 const THROW_RANGE = 260;
 const THROW_CONE = Math.PI / 6;
@@ -613,6 +659,8 @@ class Player {
     this.dashCooldownTimer = 0;
     this.invulnTimer = 0;
     this.hitFlash = 0;
+    this.isMoving = false;
+    this.walkPhase = 0;
 
     this.hp = 100;
     this.maxHp = 100;
@@ -792,6 +840,8 @@ class Player {
       mx /= len; my /= len;
       this.facing = Math.atan2(my, mx);
     }
+    this.isMoving = moving;
+    this.walkPhase = moving ? this.walkPhase + dt * 10 : 0;
 
     // Right stick (if tilted) aims independently of movement; otherwise the
     // aim just follows facing, which keeps keyboard-only play unchanged.
@@ -834,28 +884,36 @@ class Player {
       ctx.restore();
     }
 
-    // body
-    ctx.fillStyle = this.hitFlash > 0 ? "#ff8080" : "#4fa1e8";
-    ctx.beginPath();
-    ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = "#1c2b3d";
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
-    // facing indicator (length hints at the reach of the equipped weapon)
-    const indicatorLen = this.radius * 1.2 + this.melee.range * 0.25;
-    ctx.strokeStyle = "#e7e7ea";
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.lineTo(Math.cos(this.facing) * indicatorLen, Math.sin(this.facing) * indicatorLen);
-    ctx.stroke();
+    // body: top-down sprite (rotated to facing, with a small walk bob) once
+    // loaded, falling back to the original vector circle until then
+    const sprite = Sprites.get("player");
+    if (sprite) {
+      const bob = this.isMoving ? Math.sin(this.walkPhase) * 3 : 0;
+      const size = this.radius * 3.6;
+      ctx.save();
+      ctx.rotate(this.facing + Math.PI / 2); // sprite art faces "up" (-PI/2) by default
+      ctx.drawImage(sprite, -size / 2, -size / 2 + bob, size, size);
+      if (this.hitFlash > 0) {
+        ctx.globalCompositeOperation = "source-atop";
+        ctx.fillStyle = `rgba(255, 90, 90, ${Math.min(0.6, this.hitFlash * 2)})`;
+        ctx.fillRect(-size / 2, -size / 2 + bob, size, size);
+        ctx.globalCompositeOperation = "source-over";
+      }
+      ctx.restore();
+    } else {
+      ctx.fillStyle = this.hitFlash > 0 ? "#ff8080" : "#4fa1e8";
+      ctx.beginPath();
+      ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#1c2b3d";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
 
     // aim indicator: only meaningful with a ranged weapon, and only worth
     // drawing separately from facing when it actually points elsewhere
     if (this.ranged && Math.abs(this.aimAngle - this.facing) > 0.05) {
-      const aimLen = indicatorLen + 14;
+      const aimLen = this.radius * 1.2 + this.melee.range * 0.25 + 14;
       ctx.strokeStyle = "#ffd24a";
       ctx.lineWidth = 2;
       ctx.beginPath();
@@ -883,6 +941,9 @@ class Enemy {
     this.attackCooldownTimer = rand(0, 0.4);
     this.dead = false;
     this.hitFlash = 0;
+    this.facing = -Math.PI / 2; // matches the sprite's default "up" pose
+    this.isMoving = false;
+    this.walkPhase = 0;
 
     // "steady" / "aggressive" behavior
     this.jitterAngle = rand(0, Math.PI * 2);
@@ -908,14 +969,17 @@ class Enemy {
 
     if (this.ccTimer > 0) {
       this.ccTimer -= dt;
+      this.isMoving = false;
       return; // stunned/blinded by a bomb: frozen in place for the duration
     }
 
     const d = dist(this.x, this.y, player.x, player.y);
+    this.isMoving = false;
 
     if (this.type.behavior === "ranged") {
       this.updateRanged(dt, player, game, d);
     } else if (d <= this.stats.attackRange + this.radius) {
+      this.facing = Math.atan2(player.y - this.y, player.x - this.x);
       if (this.attackCooldownTimer <= 0) {
         this.attackCooldownTimer = this.stats.attackCooldown;
         const hit = player.takeDamage(this.stats.damage);
@@ -924,6 +988,8 @@ class Enemy {
     } else {
       this.moveTowardBehavior(dt, player, d);
     }
+
+    this.walkPhase = this.isMoving ? this.walkPhase + dt * 10 : 0;
 
     // simple separation from other enemies
     for (const other of game.enemies) {
@@ -961,15 +1027,19 @@ class Enemy {
     if (dir !== 0) {
       this.x += dx * dir * this.stats.speed * dt;
       this.y += dy * dir * this.stats.speed * dt;
+      this.facing = Math.atan2(dy * dir, dx * dir);
     } else {
       // small sideways strafe so it doesn't just stand still at range
       this.x += -dy * this.strafeDir * this.stats.speed * 0.3 * dt;
       this.y += dx * this.strafeDir * this.stats.speed * 0.3 * dt;
+      this.facing = Math.atan2(dy, dx); // keeps facing the player while strafing
     }
+    this.isMoving = true;
 
     if (d <= this.stats.attackRange && this.attackCooldownTimer <= 0) {
       this.attackCooldownTimer = this.stats.attackCooldown;
       const angle = Math.atan2(player.y - this.y, player.x - this.x);
+      this.facing = angle;
       game.spawnEnemyProjectile(this.x, this.y, angle, this.type.projectileSpeed, this.stats.damage);
     }
   }
@@ -1008,6 +1078,8 @@ class Enemy {
       }
       this.x += this.moveDir.x * this.stats.speed * this.moveSpeedMult * dt;
       this.y += this.moveDir.y * this.stats.speed * this.moveSpeedMult * dt;
+      this.isMoving = true;
+      this.facing = Math.atan2(this.moveDir.y, this.moveDir.x);
       return;
     }
 
@@ -1032,6 +1104,8 @@ class Enemy {
 
     this.x += jdx * this.stats.speed * dt;
     this.y += jdy * this.stats.speed * dt;
+    this.isMoving = true;
+    this.facing = Math.atan2(jdy, jdx);
   }
 
   takeDamage(amount) {
@@ -1049,13 +1123,29 @@ class Enemy {
     ctx.save();
     ctx.translate(this.x, this.y);
 
-    ctx.fillStyle = this.hitFlash > 0 ? "#ffffff" : this.type.color;
-    ctx.beginPath();
-    ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = "#00000055";
-    ctx.lineWidth = 2;
-    ctx.stroke();
+    const sprite = Sprites.get(this.type.id);
+    if (sprite) {
+      const bob = this.isMoving ? Math.sin(this.walkPhase) * 2 : 0;
+      const size = this.radius * 3.6;
+      ctx.save();
+      ctx.rotate(this.facing + Math.PI / 2); // sprite art faces "up" (-PI/2) by default
+      ctx.drawImage(sprite, -size / 2, -size / 2 + bob, size, size);
+      if (this.hitFlash > 0) {
+        ctx.globalCompositeOperation = "source-atop";
+        ctx.fillStyle = "rgba(255, 255, 255, 0.75)";
+        ctx.fillRect(-size / 2, -size / 2 + bob, size, size);
+        ctx.globalCompositeOperation = "source-over";
+      }
+      ctx.restore();
+    } else {
+      ctx.fillStyle = this.hitFlash > 0 ? "#ffffff" : this.type.color;
+      ctx.beginPath();
+      ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#00000055";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
     ctx.restore();
 
     // hp bar
