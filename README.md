@@ -33,6 +33,20 @@ Il gioco usa la Gamepad API del browser: nessuna configurazione richiesta, basta
 
 L'acquisto di potenziamenti/armi nel negozio richiede ancora mouse o tastiera: il controller copre il gameplay in tempo reale, non la navigazione dei menu.
 
+### Telefono / tablet
+
+Il gioco è pensato per l'orizzontale: se apri la pagina da un dispositivo touch in verticale, ti viene chiesto di ruotarlo. La schermata si adatta automaticamente a qualsiasi dimensione dello schermo (nessuno zoom/pinch necessario). I controlli touch compaiono solo su dispositivi con schermo touch:
+
+- **Levetta virtuale** (in basso a sinistra) — Movimento
+- **Pugno** (grande, in basso a destra) — Attacca in mischia (si può tenere premuto)
+- **Fulmine** — Scatto/schivata
+- **Pistola** (compare solo con un'arma a distanza equipaggiata) — Spara manualmente
+- **Bomba** — Lancia l'esplosivo selezionato
+- **Freccette circolari** — Cambia l'esplosivo selezionato
+- **⏸** (in alto) — Pausa e menu potenziamenti casa
+
+Anche su telefono, con un'arma a distanza equipaggiata si spara comunque in automatico non appena la mira (che segue la direzione in cui ti muovi) incontra un nemico a portata.
+
 ## Il loop di gioco
 
 - Sconfiggi i nemici di ogni zona per guadagnare soldi.
