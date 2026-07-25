@@ -23,9 +23,10 @@ html, body {
   touch-action: none; /* no pinch-zoom / pull-to-refresh / double-tap-zoom fighting the game */
 }
 
-/* Scales the fixed 960x600 game box to fit any viewport via a JS-computed
-   transform (see script.js fitGameToScreen), so none of the pixel-based HUD
-   or panel CSS below needs to change for smaller screens. */
+/* Scales (and, in portrait, rotates) the fixed 960x600 game box to fit any
+   viewport via a JS-computed transform (see script.js setupResponsiveScaling),
+   so none of the pixel-based HUD or panel CSS below needs to change for
+   smaller screens. */
 #viewport-center {
   width: 100vw;
   height: 100%;
@@ -40,6 +41,8 @@ html, body {
   height: 600px;
   flex-shrink: 0;
   transform-origin: center center;
+  /* actual transform (scale + optional 90deg rotation on phones held upright)
+     is computed in script.js's setupResponsiveScaling so it always fits the viewport */
   border: 1px solid var(--panel-border);
   border-radius: 10px;
   overflow: hidden;
@@ -417,32 +420,4 @@ html.touch-device #touch-controls { display: block; }
   width: 40px;
   height: 40px;
   font-size: 16px;
-}
-
-/* ---------- Rotate-device prompt ---------- */
-.rotate-prompt {
-  display: none;
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  background: #05060a;
-  color: var(--text);
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 16px;
-  text-align: center;
-  padding: 24px;
-}
-.rotate-icon {
-  font-size: 56px;
-  animation: rotate-hint 1.8s ease-in-out infinite;
-}
-@keyframes rotate-hint {
-  0%, 100% { transform: rotate(0deg); }
-  50% { transform: rotate(90deg); }
-}
-@media (orientation: portrait) {
-  html.touch-device .rotate-prompt { display: flex; }
-  html.touch-device #viewport-center { display: none; }
 }

@@ -1380,11 +1380,22 @@ class Game {
   // Scales the fixed 960x600 game box to fit the viewport, keeping aspect
   // ratio, via a CSS transform — the canvas keeps its native resolution and
   // every pixel-based HUD/panel style stays correct at any screen size.
+  // Scales the fixed 960x600 game box to fit any viewport. On a phone held
+  // upright (viewport taller than wide) the whole box is also rotated 90deg
+  // via CSS instead of asking the player to physically rotate the device —
+  // the canvas keeps rendering at its native 960x600 landscape resolution,
+  // only the on-screen presentation changes. bindJoystick() reads
+  // this.portraitRotated to translate real screen drags back into the
+  // game's own up/down/left/right axes.
   setupResponsiveScaling() {
     const container = document.getElementById("game-container");
     const fit = () => {
-      const scale = Math.min(window.innerWidth / CONFIG.width, window.innerHeight / CONFIG.height);
-      container.style.transform = `scale(${scale})`;
+      const portrait = window.innerHeight > window.innerWidth;
+      this.portraitRotated = portrait;
+      const scale = portrait
+        ? Math.min(window.innerWidth / CONFIG.height, window.innerHeight / CONFIG.width)
+        : Math.min(window.innerWidth / CONFIG.width, window.innerHeight / CONFIG.height);
+      container.style.transform = `rotate(${portrait ? 90 : 0}deg) scale(${scale})`;
     };
     window.addEventListener("resize", fit);
     window.addEventListener("orientationchange", fit);
@@ -1433,7 +1444,12 @@ class Game {
       const cx = rect.left + rect.width / 2;
       const cy = rect.top + rect.height / 2;
       const realMaxRadius = rect.width / 2;
-      const dx = clientX - cx, dy = clientY - cy;
+      let dx = clientX - cx, dy = clientY - cy;
+      if (this.portraitRotated) {
+        // undo the container's 90deg CSS rotation: a real on-screen drag has
+        // to be mapped back onto the game's own (unrotated) up/down/left/right
+        [dx, dy] = [dy, -dx];
+      }
       const mag = Math.hypot(dx, dy) || 1;
       const clampedFrac = Math.min(mag, realMaxRadius) / realMaxRadius; // 0..1, scale-independent
       const fx = (dx / mag) * clampedFrac;
