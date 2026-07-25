@@ -19,17 +19,30 @@ html, body {
   color: var(--text);
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: none; /* no pinch-zoom / pull-to-refresh / double-tap-zoom fighting the game */
+}
+
+/* Scales (and, in portrait, rotates) the fixed 960x600 game box to fit any
+   viewport via a JS-computed transform (see script.js setupResponsiveScaling),
+   so none of the pixel-based HUD or panel CSS below needs to change for
+   smaller screens. */
+#viewport-center {
+  width: 100vw;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 #game-container {
-  position: fixed;
-  top: 50%;
-  left: 50%;
+  position: relative;
   width: 960px;
   height: 600px;
+  flex-shrink: 0;
   transform-origin: center center;
   /* actual transform (scale + optional 90deg rotation on phones held upright)
-     is computed and applied in script.js so it always fits the viewport */
+     is computed in script.js's setupResponsiveScaling so it always fits the viewport */
   border: 1px solid var(--panel-border);
   border-radius: 10px;
   overflow: hidden;
@@ -329,4 +342,82 @@ h2 { margin: 0 0 4px; color: var(--accent); }
   font-size: 11px;
   color: var(--muted);
   pointer-events: none;
+}
+
+/* ---------- Touch controls (phones/tablets only, see .touch-device) ---------- */
+#touch-controls {
+  position: absolute;
+  inset: 0;
+  pointer-events: none; /* only the individual controls below are interactive */
+  display: none;
+}
+html.touch-device #touch-controls { display: block; }
+
+.joystick-base {
+  position: absolute;
+  left: 36px;
+  bottom: 36px;
+  width: 130px;
+  height: 130px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  border: 2px solid rgba(255, 255, 255, 0.18);
+  pointer-events: all;
+  touch-action: none;
+}
+.joystick-knob {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 56px;
+  height: 56px;
+  margin-left: -28px;
+  margin-top: -28px;
+  border-radius: 50%;
+  background: rgba(232, 163, 61, 0.45);
+  border: 2px solid rgba(232, 163, 61, 0.7);
+  pointer-events: none;
+  transition: transform 0.03s linear;
+}
+
+.touch-btn {
+  position: absolute;
+  pointer-events: all;
+  touch-action: none;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  font-size: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+.touch-btn:active { background: rgba(232, 163, 61, 0.35); }
+
+#touch-action-cluster {
+  position: absolute;
+  right: 24px;
+  bottom: 24px;
+  width: 220px;
+  height: 220px;
+}
+.touch-btn-large { width: 88px; height: 88px; right: 0; bottom: 0; font-size: 34px; }
+.touch-btn-medium { width: 66px; height: 66px; font-size: 26px; }
+#touch-dash { right: 96px; bottom: 8px; }
+#touch-fire { right: 8px; bottom: 96px; }
+.touch-btn-small { width: 52px; height: 52px; font-size: 22px; }
+#touch-bomb-throw { right: 96px; bottom: 96px; }
+.touch-btn-tiny { width: 38px; height: 38px; font-size: 16px; }
+#touch-bomb-select { right: 150px; bottom: 116px; }
+
+.touch-btn-pause {
+  top: 12px;
+  left: 50%;
+  margin-left: -20px;
+  width: 40px;
+  height: 40px;
+  font-size: 16px;
 }

@@ -1218,6 +1218,13 @@ class InputHandler {
     this._gpSelectWasDown = false;
     this._gpThrowWasDown = false;
 
+    // Touch controls (see Game.bindTouchControls): mutated directly from the
+    // joystick/button DOM handlers, polled the same way as gamepad state.
+    this.touchMove = { up: false, down: false, left: false, right: false };
+    this.touchAttack = false;
+    this.touchRanged = false;
+    this.touchDash = false;
+
     window.addEventListener("gamepadconnected", () => this.onGamepadStatusChange());
     window.addEventListener("gamepaddisconnected", () => this.onGamepadStatusChange());
   }
@@ -1299,7 +1306,7 @@ class InputHandler {
     this._gpThrowWasDown = throwDown;
   }
 
-  isDown(dir) { return this.keys.has(dir) || this.gpMove[dir]; }
+  isDown(dir) { return this.keys.has(dir) || this.gpMove[dir] || this.touchMove[dir]; }
 }
 
 /* =========================================================
@@ -1340,6 +1347,9 @@ class Game {
     this.lastTime = performance.now();
 
     this.bindUI();
+    this.detectTouchDevice();
+    this.bindTouchControls();
+    this.setupResponsiveScaling();
     this.updateHUDStatic();
     this.loop = this.loop.bind(this);
     requestAnimationFrame(this.loop);
@@ -1360,6 +1370,120 @@ class Game {
       SoundManager.muted = !SoundManager.muted;
       document.getElementById("mute-btn").textContent = SoundManager.muted ? "🔇" : "🔊";
     });
+  }
+
+  detectTouchDevice() {
+    const isTouch = "ontouchstart" in window || navigator.maxTouchPoints > 0;
+    if (isTouch) document.documentElement.classList.add("touch-device");
+  }
+
+  // Scales the fixed 960x600 game box to fit the viewport, keeping aspect
+  // ratio, via a CSS transform — the canvas keeps its native resolution and
+  // every pixel-based HUD/panel style stays correct at any screen size.
+  // Scales the fixed 960x600 game box to fit any viewport. On a phone held
+  // upright (viewport taller than wide) the whole box is also rotated 90deg
+  // via CSS instead of asking the player to physically rotate the device —
+  // the canvas keeps rendering at its native 960x600 landscape resolution,
+  // only the on-screen presentation changes. bindJoystick() reads
+  // this.portraitRotated to translate real screen drags back into the
+  // game's own up/down/left/right axes.
+  setupResponsiveScaling() {
+    const container = document.getElementById("game-container");
+    const fit = () => {
+      const portrait = window.innerHeight > window.innerWidth;
+      this.portraitRotated = portrait;
+      const scale = portrait
+        ? Math.min(window.innerWidth / CONFIG.height, window.innerHeight / CONFIG.width)
+        : Math.min(window.innerWidth / CONFIG.width, window.innerHeight / CONFIG.height);
+      container.style.transform = `rotate(${portrait ? 90 : 0}deg) scale(${scale})`;
+    };
+    window.addEventListener("resize", fit);
+    window.addEventListener("orientationchange", fit);
+    fit();
+  }
+
+  // Touch controls only matter on touch devices, but binding them is harmless
+  // elsewhere (the buttons simply never receive touch events on a desktop).
+  bindTouchControls() {
+    const holdButton = (id, prop) => {
+      const el = document.getElementById(id);
+      const start = e => { e.preventDefault(); this.input[prop] = true; };
+      const end = e => { e.preventDefault(); this.input[prop] = false; };
+      el.addEventListener("touchstart", start, { passive: false });
+      el.addEventListener("touchend", end, { passive: false });
+      el.addEventListener("touchcancel", end, { passive: false });
+    };
+    holdButton("touch-attack", "touchAttack");
+    holdButton("touch-fire", "touchRanged");
+    holdButton("touch-dash", "touchDash");
+
+    document.getElementById("touch-bomb-throw").addEventListener("touchstart", e => {
+      e.preventDefault();
+      if (this.state === "playing") this.throwBomb();
+    }, { passive: false });
+    document.getElementById("touch-bomb-select").addEventListener("touchstart", e => {
+      e.preventDefault();
+      if (this.state === "playing") this.selectBomb(1, false);
+    }, { passive: false });
+    document.getElementById("touch-pause").addEventListener("touchstart", e => {
+      e.preventDefault();
+      this.toggleUpgradeMenu();
+    }, { passive: false });
+
+    this.bindJoystick();
+  }
+
+  bindJoystick() {
+    const base = document.getElementById("joystick-base");
+    const knob = document.getElementById("joystick-knob");
+    const knobTravel = 37; // logical px the knob can drift from center, independent of screen scale
+    let touchId = null;
+
+    const update = (clientX, clientY) => {
+      const rect = base.getBoundingClientRect();
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      const realMaxRadius = rect.width / 2;
+      let dx = clientX - cx, dy = clientY - cy;
+      if (this.portraitRotated) {
+        // undo the container's 90deg CSS rotation: a real on-screen drag has
+        // to be mapped back onto the game's own (unrotated) up/down/left/right
+        [dx, dy] = [dy, -dx];
+      }
+      const mag = Math.hypot(dx, dy) || 1;
+      const clampedFrac = Math.min(mag, realMaxRadius) / realMaxRadius; // 0..1, scale-independent
+      const fx = (dx / mag) * clampedFrac;
+      const fy = (dy / mag) * clampedFrac;
+      knob.style.transform = `translate(${fx * knobTravel}px, ${fy * knobTravel}px)`;
+
+      if (Math.hypot(fx, fy) < 0.2) {
+        this.input.touchMove = { up: false, down: false, left: false, right: false };
+      } else {
+        this.input.touchMove = { left: fx < -0.3, right: fx > 0.3, up: fy < -0.3, down: fy > 0.3 };
+      }
+    };
+    const reset = () => {
+      touchId = null;
+      knob.style.transform = "translate(0, 0)";
+      this.input.touchMove = { up: false, down: false, left: false, right: false };
+    };
+
+    base.addEventListener("touchstart", e => {
+      e.preventDefault();
+      const t = e.changedTouches[0];
+      touchId = t.identifier;
+      update(t.clientX, t.clientY);
+    }, { passive: false });
+    base.addEventListener("touchmove", e => {
+      e.preventDefault();
+      for (const t of e.changedTouches) if (t.identifier === touchId) update(t.clientX, t.clientY);
+    }, { passive: false });
+    const onEnd = e => {
+      e.preventDefault();
+      for (const t of e.changedTouches) if (t.identifier === touchId) reset();
+    };
+    base.addEventListener("touchend", onEnd, { passive: false });
+    base.addEventListener("touchcancel", onEnd, { passive: false });
   }
 
   zoneName(zone) {
@@ -1934,6 +2058,7 @@ class Game {
     } else {
       rangedIndicator.classList.add("hidden");
     }
+    document.getElementById("touch-fire").classList.toggle("hidden", !this.player.ranged);
 
     const bombType = THROWABLES[this.player.selectedThrowable];
     const bombCount = this.run.bombs[bombType.id] || 0;
@@ -1947,9 +2072,9 @@ class Game {
     // Attack/shoot/dash are held down rather than edge-triggered (there's no
     // "keydown" equivalent for a polled gamepad); their own cooldowns already
     // throttle this the same way holding a keyboard key would.
-    if (this.input.gpAttack) this.player.tryAttack(this);
-    if (this.input.gpRanged) this.player.tryRangedAttack(this);
-    if (this.input.gpDash) this.player.tryDash();
+    if (this.input.gpAttack || this.input.touchAttack) this.player.tryAttack(this);
+    if (this.input.gpRanged || this.input.touchRanged) this.player.tryRangedAttack(this);
+    if (this.input.gpDash || this.input.touchDash) this.player.tryDash();
     // Hands-free shooting: fires on its own whenever the aim rests on an
     // enemy, on top of (not instead of) the manual F/R2 trigger above.
     this.player.autoFireRanged(this);
@@ -2068,27 +2193,6 @@ class Game {
     requestAnimationFrame(this.loop);
   }
 }
-
-// The game is built around a fixed 960x600 landscape canvas, but on a phone
-// held upright the viewport is taller than it is wide. Rather than forcing
-// the player to physically rotate the device, we rotate the whole container
-// 90deg via CSS and scale it to fill the portrait viewport — the canvas
-// itself still renders at 960x600 internally, so no game logic changes.
-function fitGameContainer() {
-  const container = document.getElementById("game-container");
-  if (!container) return;
-  const GAME_W = CONFIG.width, GAME_H = CONFIG.height;
-  const vw = window.innerWidth, vh = window.innerHeight;
-  const portrait = vh > vw;
-  const scale = portrait
-    ? Math.min(vw / GAME_H, vh / GAME_W)
-    : Math.min(vw / GAME_W, vh / GAME_H);
-  const rotate = portrait ? 90 : 0;
-  container.style.transform = `translate(-50%, -50%) rotate(${rotate}deg) scale(${scale})`;
-}
-window.addEventListener("resize", fitGameContainer);
-window.addEventListener("orientationchange", fitGameContainer);
-fitGameContainer();
 
 window.addEventListener("load", () => {
   new Game();
