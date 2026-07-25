@@ -13,11 +13,13 @@
   <div id="hud" class="hidden">
     <div class="hud-left">
       <div class="hp-bar"><div id="hp-fill" class="hp-fill"></div><span id="hp-label" class="hp-label">100 / 100</span></div>
-      <div id="dash-indicator" class="dash-indicator"></div>
+      <div id="dash-indicator" class="dash-indicator" title="Scatto (Shift)"></div>
+      <div id="ranged-indicator" class="dash-indicator ranged-indicator hidden" title="Arma a distanza (F)"></div>
     </div>
     <div class="hud-center">
       <div id="zone-label" class="zone-label">Zona 1 — Ai margini del quartiere</div>
       <div id="wave-label" class="wave-label">Nemici rimasti: 0</div>
+      <div id="weapon-label" class="weapon-label">Pugni</div>
     </div>
     <div class="hud-right">
       <div id="money-label" class="money-label">€ 0</div>
@@ -31,14 +33,20 @@
       <p class="tagline">Sei un ragazzo qualunque. Il quartiere no.</p>
       <p class="desc">
         Ogni notte i criminali di strada provano ad assaltarti per portarti via tutto.
-        Difenditi, mettili K.O. e usa i soldi guadagnati per rinforzare casa tua.
-        Più ti addentri nel quartiere, più diventano veloci e aggressivi.
+        Difenditi, mettili K.O. e usa i soldi guadagnati per rinforzare casa tua e comprare
+        armi migliori. Più ti addentri nel quartiere, più diventano numerosi, veloci e aggressivi.
       </p>
       <div class="controls">
         <div><b>WASD / Frecce</b> — Movimento</div>
-        <div><b>Spazio</b> — Attacca</div>
+        <div><b>Spazio</b> — Attacca (mischia)</div>
+        <div><b>F</b> — Spara (se hai un'arma a distanza)</div>
         <div><b>Shift</b> — Scatto (schivata)</div>
         <div><b>U</b> — Potenzia casa / Pausa</div>
+      </div>
+      <div class="enemy-legend">
+        <div class="legend-item"><span class="legend-dot" style="background:#8a7355"></span><b>Balordo</b> — lento e prevedibile</div>
+        <div class="legend-item"><span class="legend-dot" style="background:#e0703d"></span><b>Nervoso</b> — veloce, attacca in fretta</div>
+        <div class="legend-item"><span class="legend-dot" style="background:#9b59d0"></span><b>Imprevedibile</b> — movimenti erratici, non sempre ti insegue</div>
       </div>
       <div id="save-summary" class="save-summary hidden">
         Salvataggio trovato: <span id="save-money"></span>€, zona migliore <span id="save-zone"></span>
@@ -51,7 +59,16 @@
     <div class="panel">
       <h2 id="upgrade-title">Potenzia casa</h2>
       <p id="upgrade-subtitle" class="tagline"></p>
+
+      <h3 class="section-title">Potenziamenti casa</h3>
       <div id="upgrade-list" class="upgrade-list"></div>
+
+      <h3 class="section-title">Armi da mischia</h3>
+      <div id="melee-weapon-list" class="upgrade-list weapon-list"></div>
+
+      <h3 class="section-title">Armi a distanza</h3>
+      <div id="ranged-weapon-list" class="upgrade-list weapon-list"></div>
+
       <div class="upgrade-footer">
         <div id="upgrade-money" class="money-label">€ 0</div>
         <button id="upgrade-continue-btn" class="btn-primary">Continua</button>
@@ -72,7 +89,7 @@
     </div>
   </div>
 
-  <div id="pause-hint" class="pause-hint hidden">U: Potenzia casa · Spazio: Attacca · Shift: Scatto</div>
+  <div id="pause-hint" class="pause-hint hidden">U: Potenzia casa · Spazio: Attacca · F: Spara · Shift: Scatto</div>
 </div>
 
 <script src="script.js"></script>

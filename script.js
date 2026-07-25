@@ -12,11 +12,7 @@ const CONFIG = {
   player: {
     baseSpeed: 220,
     baseMaxHP: 100,
-    baseDamage: 18,
-    attackRange: 52,
     attackArc: Math.PI * 1.3, // visual swing only; hit detection is a full circle around the player
-    attackCooldown: 0.42,
-    attackActiveTime: 0.12,
     dashSpeed: 640,
     dashDuration: 0.16,
     dashCooldown: 1.3,
@@ -117,6 +113,78 @@ const UPGRADES = [
   },
 ];
 
+// Sequential melee tiers: each purchase replaces the previous weapon.
+// Knives trade range for speed/damage; bats and poles trade speed for reach.
+const MELEE_WEAPONS = [
+  { id: "fists", name: "Pugni", desc: "Le tue mani. Gratis, ma poco convincenti.", cost: 0, damage: 18, range: 52, cooldown: 0.42 },
+  { id: "knife1", name: "Coltello", desc: "Taglia in fretta: più danno e colpi più veloci.", cost: 70, damage: 26, range: 50, cooldown: 0.32 },
+  { id: "knife2", name: "Coltello a serramanico", desc: "Lama migliore: ancora più danno e velocità.", cost: 170, damage: 36, range: 50, cooldown: 0.24 },
+  { id: "bat", name: "Mazza da baseball", desc: "Più lenta, ma colpisce molto più lontano e più forte.", cost: 320, damage: 50, range: 78, cooldown: 0.55 },
+  { id: "pole", name: "Palo d'acciaio", desc: "Portata e danno massimi. Non fa sconti.", cost: 520, damage: 68, range: 94, cooldown: 0.62 },
+];
+
+// Ranged weapons are a separate, optional loadout slot (key F) unlocked once
+// you've reached a deep enough zone at least once. Also sequential.
+const RANGED_WEAPONS = [
+  { id: "pistol", name: "Pistola", desc: "Colpisce a distanza. Cadenza moderata.", cost: 250, damage: 22, cooldown: 0.6, projectileSpeed: 560, minZone: 3 },
+  { id: "smg", name: "Mitra", desc: "Raffica rapida, danno per colpo minore.", cost: 600, damage: 13, cooldown: 0.14, projectileSpeed: 640, minZone: 5 },
+];
+
+// Three enemy archetypes with distinct movement/attack behavior, not just
+// stat multipliers, so they read as different threats at a glance.
+const ENEMY_TYPES = [
+  {
+    id: "balordo",
+    label: "Balordo",
+    color: "#8a7355",
+    radiusMult: 1.12,
+    speedMult: 0.72,
+    hpMult: 1.25,
+    damageMult: 1.0,
+    cooldownMult: 1.0,
+    behavior: "steady", // predictable, direct pursuit — the baseline threat
+    minZone: 1,
+    weight: (zone) => Math.max(0.15, 1.4 - zone * 0.12),
+  },
+  {
+    id: "nervoso",
+    label: "Nervoso",
+    color: "#e0703d",
+    radiusMult: 0.9,
+    speedMult: 1.4,
+    hpMult: 0.8,
+    damageMult: 1.05,
+    cooldownMult: 0.7,
+    behavior: "aggressive", // beelines at you and swings fast
+    minZone: 1,
+    weight: (zone) => 0.4 + zone * 0.1,
+  },
+  {
+    id: "imprevedibile",
+    label: "Imprevedibile",
+    color: "#9b59d0",
+    radiusMult: 1.0,
+    speedMult: 1.1,
+    hpMult: 0.9,
+    damageMult: 1.0,
+    cooldownMult: 0.85,
+    behavior: "erratic", // darts around, doesn't reliably chase
+    minZone: 3,
+    weight: (zone) => (zone < 3 ? 0 : 0.25 + (zone - 3) * 0.15),
+  },
+];
+
+function pickEnemyType(zone) {
+  const candidates = ENEMY_TYPES.filter(t => zone >= t.minZone);
+  const total = candidates.reduce((sum, t) => sum + t.weight(zone), 0);
+  let roll = rand(0, total);
+  for (const t of candidates) {
+    roll -= t.weight(zone);
+    if (roll <= 0) return t;
+  }
+  return candidates[candidates.length - 1];
+}
+
 const SAVE_KEY = "quartiere_ostile_save_v1";
 
 /* =========================================================
@@ -158,6 +226,7 @@ const SoundManager = {
   ko() { this.beep(90, 0.2, "triangle", 0.08); },
   coin() { this.beep(760, 0.08, "square", 0.04); },
   dash() { this.beep(500, 0.07, "sine", 0.03); },
+  shoot() { this.beep(880, 0.05, "square", 0.045); },
   wave() { this.beep(220, 0.3, "triangle", 0.06); },
   gameover() { this.beep(80, 0.5, "sawtooth", 0.08); },
 };
@@ -180,7 +249,7 @@ function loadSave() {
 function defaultSave() {
   const upgrades = {};
   UPGRADES.forEach(u => { upgrades[u.id] = 0; });
-  return { money: 0, upgrades, bestZone: 1 };
+  return { money: 0, upgrades, bestZone: 1, meleeTier: 0, rangedTier: -1 };
 }
 
 /* =========================================================
@@ -214,6 +283,36 @@ class FloatingText {
 }
 
 /* =========================================================
+   PROJECTILE (fired by ranged weapons)
+========================================================= */
+class Projectile {
+  constructor(x, y, angle, speed, damage) {
+    this.x = x;
+    this.y = y;
+    this.vx = Math.cos(angle) * speed;
+    this.vy = Math.sin(angle) * speed;
+    this.damage = damage;
+    this.radius = 6;
+    this.dead = false;
+  }
+  update(dt) {
+    this.x += this.vx * dt;
+    this.y += this.vy * dt;
+    if (this.x < -20 || this.x > CONFIG.width + 20 || this.y < -20 || this.y > CONFIG.height + 20) {
+      this.dead = true;
+    }
+  }
+  draw(ctx) {
+    ctx.save();
+    ctx.fillStyle = "#ffe27a";
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+/* =========================================================
    PLAYER
 ========================================================= */
 class Player {
@@ -225,6 +324,7 @@ class Player {
 
     this.attackCooldownTimer = 0;
     this.attackActiveTimer = 0;
+    this.rangedCooldownTimer = 0;
     this.dashTimer = 0;
     this.dashCooldownTimer = 0;
     this.invulnTimer = 0;
@@ -233,13 +333,15 @@ class Player {
     this.hp = 100;
     this.maxHp = 100;
     this.stats = null; // computed from upgrades
+    this.melee = null; // computed from equipped melee weapon
+    this.ranged = null; // computed from equipped ranged weapon, or null if unarmed
   }
 
-  applyUpgrades(upgradeLevels) {
-    const lvl = id => upgradeLevels[id] || 0;
+  refreshLoadout(save) {
+    const lvl = id => save.upgrades[id] || 0;
     const cfg = CONFIG.player;
 
-    const dmgBonus = lvl("gym") * UPGRADES.find(u => u.id === "gym").perLevel;
+    const gymBonus = lvl("gym") * UPGRADES.find(u => u.id === "gym").perLevel;
     const speedMult = 1 + lvl("shoes") * UPGRADES.find(u => u.id === "shoes").perLevel;
     const defReduction = lvl("jacket") * UPGRADES.find(u => u.id === "jacket").perLevel;
     const hpBonus = lvl("firstaid") * UPGRADES.find(u => u.id === "firstaid").perLevel;
@@ -254,11 +356,32 @@ class Player {
     this.stats = {
       speed: cfg.baseSpeed * speedMult,
       dashSpeed: cfg.dashSpeed * speedMult,
-      damage: cfg.baseDamage + dmgBonus,
       defReduction: clamp(defReduction, 0, 0.75),
       stealReduction: clamp(stealReduction, 0, 0.9),
       doorHealFraction: clamp(doorHeal, 0, 0.9),
     };
+
+    const meleeWeapon = MELEE_WEAPONS[save.meleeTier || 0];
+    this.melee = {
+      name: meleeWeapon.name,
+      damage: meleeWeapon.damage + gymBonus,
+      range: meleeWeapon.range,
+      cooldown: meleeWeapon.cooldown,
+      activeTime: Math.min(0.18, meleeWeapon.cooldown * 0.4),
+    };
+
+    const rangedIdx = save.rangedTier;
+    if (rangedIdx != null && rangedIdx >= 0 && RANGED_WEAPONS[rangedIdx]) {
+      const rw = RANGED_WEAPONS[rangedIdx];
+      this.ranged = {
+        name: rw.name,
+        damage: rw.damage + gymBonus * 0.5,
+        cooldown: rw.cooldown,
+        projectileSpeed: rw.projectileSpeed,
+      };
+    } else {
+      this.ranged = null;
+    }
   }
 
   resetForRun() {
@@ -276,20 +399,37 @@ class Player {
 
   tryAttack(game) {
     if (this.attackCooldownTimer > 0) return;
-    this.attackCooldownTimer = CONFIG.player.attackCooldown;
-    this.attackActiveTimer = CONFIG.player.attackActiveTime;
+    this.attackCooldownTimer = this.melee.cooldown;
+    this.attackActiveTimer = this.melee.activeTime;
     SoundManager.attack();
 
-    const cfg = CONFIG.player;
     // Hits everything in range around the player (short-range swing), not just
     // a narrow cone: with several enemies closing in from different sides at
     // once, requiring pixel-perfect facing made the fight unplayable.
     for (const enemy of game.enemies) {
       if (enemy.dead) continue;
       const d = dist(this.x, this.y, enemy.x, enemy.y);
-      if (d > cfg.attackRange + enemy.radius) continue;
-      game.damageEnemy(enemy, this.stats.damage);
+      if (d > this.melee.range + enemy.radius) continue;
+      game.damageEnemy(enemy, this.melee.damage);
     }
+  }
+
+  tryRangedAttack(game) {
+    if (!this.ranged || this.rangedCooldownTimer > 0) return;
+    this.rangedCooldownTimer = this.ranged.cooldown;
+    // Facing only has 8 possible directions (derived from WASD combos), so
+    // without a mouse to aim with, a bit of soft lock-on onto whatever enemy
+    // is roughly ahead makes shooting feel intentional instead of hopeless.
+    const angle = game.aimAssist(this.x, this.y, this.facing);
+    const muzzle = this.radius + 8;
+    game.spawnProjectile(
+      this.x + Math.cos(angle) * muzzle,
+      this.y + Math.sin(angle) * muzzle,
+      angle,
+      this.ranged.projectileSpeed,
+      this.ranged.damage
+    );
+    SoundManager.shoot();
   }
 
   tryDash() {
@@ -313,6 +453,7 @@ class Player {
   update(dt, input) {
     if (this.attackCooldownTimer > 0) this.attackCooldownTimer -= dt;
     if (this.attackActiveTimer > 0) this.attackActiveTimer -= dt;
+    if (this.rangedCooldownTimer > 0) this.rangedCooldownTimer -= dt;
     if (this.dashCooldownTimer > 0) this.dashCooldownTimer -= dt;
     if (this.invulnTimer > 0) this.invulnTimer -= dt;
     if (this.hitFlash > 0) this.hitFlash -= dt;
@@ -360,7 +501,7 @@ class Player {
       ctx.fillStyle = "rgba(232, 163, 61, 0.35)";
       ctx.beginPath();
       ctx.moveTo(0, 0);
-      ctx.arc(0, 0, CONFIG.player.attackRange, -CONFIG.player.attackArc / 2, CONFIG.player.attackArc / 2);
+      ctx.arc(0, 0, this.melee.range, -CONFIG.player.attackArc / 2, CONFIG.player.attackArc / 2);
       ctx.closePath();
       ctx.fill();
       ctx.restore();
@@ -375,12 +516,13 @@ class Player {
     ctx.lineWidth = 2;
     ctx.stroke();
 
-    // facing indicator
+    // facing indicator (length hints at the reach of the equipped weapon)
+    const indicatorLen = this.radius * 1.2 + this.melee.range * 0.25;
     ctx.strokeStyle = "#e7e7ea";
     ctx.lineWidth = 3;
     ctx.beginPath();
     ctx.moveTo(0, 0);
-    ctx.lineTo(Math.cos(this.facing) * this.radius * 1.4, Math.sin(this.facing) * this.radius * 1.4);
+    ctx.lineTo(Math.cos(this.facing) * indicatorLen, Math.sin(this.facing) * indicatorLen);
     ctx.stroke();
 
     ctx.restore();
@@ -391,18 +533,26 @@ class Player {
    ENEMY
 ========================================================= */
 class Enemy {
-  constructor(x, y, stats) {
+  constructor(x, y, stats, type) {
     this.x = x;
     this.y = y;
-    this.radius = CONFIG.enemy.radius;
+    this.type = type;
+    this.radius = CONFIG.enemy.radius * (type.radiusMult || 1);
     this.stats = stats;
     this.hp = stats.maxHP;
     this.maxHp = stats.maxHP;
     this.attackCooldownTimer = rand(0, 0.4);
     this.dead = false;
     this.hitFlash = 0;
+
+    // "steady" / "aggressive" behavior
     this.jitterAngle = rand(0, Math.PI * 2);
     this.jitterTimer = rand(0, 1);
+
+    // "erratic" behavior
+    this.moveDir = { x: 0, y: 0 };
+    this.moveSpeedMult = 1;
+    this.erraticTimer = rand(0, 0.3);
   }
 
   update(dt, player, game) {
@@ -418,23 +568,8 @@ class Enemy {
         const hit = player.takeDamage(this.stats.damage);
         if (hit) game.onPlayerHit(this.stats);
       }
-    } else if (d <= this.stats.detectRange) {
-      let dx = player.x - this.x;
-      let dy = player.y - this.y;
-      const len = Math.hypot(dx, dy) || 1;
-      dx /= len; dy /= len;
-
-      this.jitterTimer -= dt;
-      if (this.jitterTimer <= 0) {
-        this.jitterAngle = rand(-1, 1) * this.stats.aggression;
-        this.jitterTimer = rand(0.2, 0.5);
-      }
-      const cos = Math.cos(this.jitterAngle), sin = Math.sin(this.jitterAngle);
-      const jdx = dx * cos - dy * sin;
-      const jdy = dx * sin + dy * cos;
-
-      this.x += jdx * this.stats.speed * dt;
-      this.y += jdy * this.stats.speed * dt;
+    } else {
+      this.moveTowardBehavior(dt, player, d);
     }
 
     // simple separation from other enemies
@@ -456,6 +591,66 @@ class Enemy {
     this.y = clamp(this.y, margin + 60, CONFIG.height - margin);
   }
 
+  moveTowardBehavior(dt, player, d) {
+    if (this.type.behavior === "erratic") {
+      this.erraticTimer -= dt;
+      if (this.erraticTimer <= 0) {
+        this.erraticTimer = rand(0.25, 0.6);
+        const dx = player.x - this.x, dy = player.y - this.y;
+        const len = Math.hypot(dx, dy) || 1;
+        if (d > this.stats.detectRange * 1.3) {
+          // player far away: aimless wandering, not actively hunting
+          const a = rand(0, Math.PI * 2);
+          this.moveDir = { x: Math.cos(a), y: Math.sin(a) };
+          this.moveSpeedMult = 0.4;
+        } else {
+          const roll = Math.random();
+          if (roll < 0.45) {
+            // lunge straight at the player
+            this.moveDir = { x: dx / len, y: dy / len };
+            this.moveSpeedMult = 1.3;
+          } else if (roll < 0.8) {
+            // dart off at a wide angle — sideways or backwards, not a retreat
+            const baseAngle = Math.atan2(dy, dx);
+            const off = rand(0.9, 2.4) * (Math.random() < 0.5 ? -1 : 1);
+            const a = baseAngle + off;
+            this.moveDir = { x: Math.cos(a), y: Math.sin(a) };
+            this.moveSpeedMult = 1.1;
+          } else {
+            // dart straight away
+            this.moveDir = { x: -dx / len, y: -dy / len };
+            this.moveSpeedMult = 1.0;
+          }
+        }
+      }
+      this.x += this.moveDir.x * this.stats.speed * this.moveSpeedMult * dt;
+      this.y += this.moveDir.y * this.stats.speed * this.moveSpeedMult * dt;
+      return;
+    }
+
+    if (d > this.stats.detectRange) return;
+
+    let dx = player.x - this.x;
+    let dy = player.y - this.y;
+    const len = Math.hypot(dx, dy) || 1;
+    dx /= len; dy /= len;
+
+    const aggressive = this.type.behavior === "aggressive";
+    const jitterAmp = aggressive ? 0.12 : 0.4;
+
+    this.jitterTimer -= dt;
+    if (this.jitterTimer <= 0) {
+      this.jitterAngle = rand(-1, 1) * jitterAmp;
+      this.jitterTimer = aggressive ? rand(0.15, 0.3) : rand(0.2, 0.5);
+    }
+    const cos = Math.cos(this.jitterAngle), sin = Math.sin(this.jitterAngle);
+    const jdx = dx * cos - dy * sin;
+    const jdy = dx * sin + dy * cos;
+
+    this.x += jdx * this.stats.speed * dt;
+    this.y += jdy * this.stats.speed * dt;
+  }
+
   takeDamage(amount) {
     this.hp -= amount;
     this.hitFlash = 0.15;
@@ -471,11 +666,11 @@ class Enemy {
     ctx.save();
     ctx.translate(this.x, this.y);
 
-    ctx.fillStyle = this.hitFlash > 0 ? "#ffffff" : "#c0505f";
+    ctx.fillStyle = this.hitFlash > 0 ? "#ffffff" : this.type.color;
     ctx.beginPath();
     ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = "#3a1418";
+    ctx.strokeStyle = "#00000055";
     ctx.lineWidth = 2;
     ctx.stroke();
     ctx.restore();
@@ -508,12 +703,14 @@ class InputHandler {
     window.addEventListener("keydown", e => this.handleDown(e));
     window.addEventListener("keyup", e => this.handleUp(e));
     this.onAttack = null;
+    this.onRangedAttack = null;
     this.onDash = null;
     this.onToggleMenu = null;
   }
   handleDown(e) {
     if (this.map[e.code]) { this.keys.add(this.map[e.code]); }
     if (e.code === "Space") { e.preventDefault(); if (this.onAttack) this.onAttack(); }
+    if (e.code === "KeyF") { if (this.onRangedAttack) this.onRangedAttack(); }
     if (e.code === "ShiftLeft" || e.code === "ShiftRight") { if (this.onDash) this.onDash(); }
     if (e.code === "KeyU" || e.code === "Escape") { if (this.onToggleMenu) this.onToggleMenu(); }
   }
@@ -533,15 +730,19 @@ class Game {
 
     this.input = new InputHandler();
     this.input.onAttack = () => { if (this.state === "playing") this.player.tryAttack(this); };
+    this.input.onRangedAttack = () => { if (this.state === "playing") this.player.tryRangedAttack(this); };
     this.input.onDash = () => { if (this.state === "playing") this.player.tryDash(); };
     this.input.onToggleMenu = () => this.toggleUpgradeMenu();
 
     this.save = loadSave() || defaultSave();
+    if (this.save.meleeTier == null) this.save.meleeTier = 0;
+    if (this.save.rangedTier == null) this.save.rangedTier = -1;
     this.player = new Player(CONFIG.width / 2, CONFIG.height / 2);
-    this.player.applyUpgrades(this.save.upgrades);
+    this.player.refreshLoadout(this.save);
     this.player.resetForRun();
 
     this.enemies = [];
+    this.projectiles = [];
     this.floatingTexts = [];
 
     this.zone = 1;
@@ -594,33 +795,36 @@ class Game {
     return `${names[names.length - 1]} (Lv. ${zone - names.length + 1})`;
   }
 
-  enemyStatsForZone(zone) {
+  enemyStatsForZone(zone, type) {
     const s = CONFIG.enemy;
     const z = zone - 1;
     const sc = CONFIG.zoneScaling;
     return {
-      speed: s.baseSpeed * (1 + sc.speedPerZone * z),
-      maxHP: Math.round(s.baseMaxHP * (1 + sc.hpPerZone * z)),
-      damage: Math.round(s.baseDamage * (1 + sc.damagePerZone * z)),
-      attackCooldown: Math.max(sc.minCooldown, s.attackCooldown * (1 - sc.cooldownFactorPerZone * z)),
+      speed: s.baseSpeed * (1 + sc.speedPerZone * z) * type.speedMult,
+      maxHP: Math.round(s.baseMaxHP * (1 + sc.hpPerZone * z) * type.hpMult),
+      damage: Math.round(s.baseDamage * (1 + sc.damagePerZone * z) * type.damageMult),
+      attackCooldown: Math.max(
+        sc.minCooldown,
+        s.attackCooldown * (1 - sc.cooldownFactorPerZone * z) * type.cooldownMult
+      ),
       attackRange: s.attackRange,
       detectRange: s.detectRange,
       moneyRange: [
         Math.round(s.baseMoneyDrop[0] * (1 + sc.moneyPerZone * z)),
         Math.round(s.baseMoneyDrop[1] * (1 + sc.moneyPerZone * z)),
       ],
-      aggression: clamp(0.5 + z * 0.12, 0.5, 2.2),
     };
   }
 
   startRun() {
-    this.player.applyUpgrades(this.save.upgrades);
+    this.player.refreshLoadout(this.save);
     this.player.resetForRun();
     this.player.x = CONFIG.width / 2;
     this.player.y = CONFIG.height / 2;
     this.zone = 1;
     this.moneyThisRun = 0;
     this.enemies = [];
+    this.projectiles = [];
     this.floatingTexts = [];
     this.setState("playing");
     this.startZone();
@@ -628,6 +832,10 @@ class Game {
 
   startZone() {
     this.player.healOnNewZone();
+    if (this.zone > this.save.bestZone) {
+      this.save.bestZone = this.zone;
+      this.persist();
+    }
     const count = Math.min(
       CONFIG.waves.baseEnemies + (this.zone - 1) * CONFIG.waves.perZone,
       CONFIG.waves.maxEnemies
@@ -648,8 +856,36 @@ class Game {
     else if (edge === 2) { x = m; y = rand(90, CONFIG.height - m); }
     else { x = CONFIG.width - m; y = rand(90, CONFIG.height - m); }
 
-    const zoneStats = this.enemyStatsForZone(this.zone);
-    this.enemies.push(new Enemy(x, y, zoneStats));
+    const type = pickEnemyType(this.zone);
+    const zoneStats = this.enemyStatsForZone(this.zone, type);
+    this.enemies.push(new Enemy(x, y, zoneStats, type));
+  }
+
+  spawnProjectile(x, y, angle, speed, damage) {
+    this.projectiles.push(new Projectile(x, y, angle, speed, damage));
+  }
+
+  // Snaps the firing angle onto the nearest enemy within a narrow cone ahead
+  // of the player, if there is one; otherwise fires straight along facing.
+  aimAssist(x, y, facing) {
+    const maxAngle = Math.PI / 5;
+    const maxDist = 480;
+    let best = null;
+    let bestDiff = Infinity;
+    for (const enemy of this.enemies) {
+      if (enemy.dead) continue;
+      const dx = enemy.x - x, dy = enemy.y - y;
+      const d = Math.hypot(dx, dy);
+      if (d > maxDist) continue;
+      const angle = Math.atan2(dy, dx);
+      let diff = Math.abs(angle - facing);
+      if (diff > Math.PI) diff = Math.PI * 2 - diff;
+      if (diff <= maxAngle && diff < bestDiff) {
+        bestDiff = diff;
+        best = angle;
+      }
+    }
+    return best !== null ? best : facing;
   }
 
   damageEnemy(enemy, amount) {
@@ -708,6 +944,8 @@ class Game {
       btn.textContent = "Riprendi";
     }
     this.renderUpgradeList();
+    this.renderWeaponList("melee-weapon-list", MELEE_WEAPONS, this.save.meleeTier, (idx) => this.buyMeleeWeapon(idx));
+    this.renderWeaponList("ranged-weapon-list", RANGED_WEAPONS, this.save.rangedTier, (idx) => this.buyRangedWeapon(idx));
     document.getElementById("upgrade-screen").classList.remove("hidden");
   }
 
@@ -750,7 +988,7 @@ class Game {
           if (this.save.money >= cost) {
             this.save.money -= cost;
             this.save.upgrades[upg.id] = level + 1;
-            this.player.applyUpgrades(this.save.upgrades);
+            this.player.refreshLoadout(this.save);
             this.persist();
             this.renderUpgradeList();
             this.updateHUDStatic();
@@ -760,6 +998,62 @@ class Game {
       list.appendChild(card);
     });
     document.getElementById("upgrade-money").textContent = `€ ${this.save.money}`;
+  }
+
+  // Shared renderer for the sequential melee/ranged weapon tracks: only the
+  // next tier is ever purchasable, earlier tiers show as owned, later ones
+  // as locked (optionally gated behind a minimum zone reached).
+  renderWeaponList(containerId, weapons, currentTier, onBuy) {
+    const list = document.getElementById(containerId);
+    list.innerHTML = "";
+    weapons.forEach((weapon, idx) => {
+      const owned = idx <= currentTier;
+      const isNext = idx === currentTier + 1;
+      const zoneLocked = weapon.minZone && this.save.bestZone < weapon.minZone;
+
+      const card = document.createElement("div");
+      card.className = "upgrade-card";
+      let statusHtml;
+      if (owned) {
+        statusHtml = `<span class="level">${idx === currentTier ? "In uso" : "Sbloccata"}</span><button disabled>Posseduta</button>`;
+      } else if (!isNext) {
+        statusHtml = `<span class="level">Bloccata</span><button disabled>Compra prima l'arma precedente</button>`;
+      } else if (zoneLocked) {
+        statusHtml = `<span class="level">Bloccata</span><button disabled>Si sblocca alla zona ${weapon.minZone}</button>`;
+      } else {
+        const affordable = weapon.cost <= this.save.money;
+        statusHtml = `<span class="level">&nbsp;</span><button ${affordable ? "" : "disabled"}>Acquista — ${weapon.cost}€</button>`;
+      }
+
+      card.innerHTML = `<h3>${weapon.name}</h3><p>${weapon.desc}</p><div class="row">${statusHtml}</div>`;
+      if (isNext && !zoneLocked) {
+        card.querySelector("button").addEventListener("click", () => onBuy(idx));
+      }
+      list.appendChild(card);
+    });
+  }
+
+  buyMeleeWeapon(idx) {
+    const weapon = MELEE_WEAPONS[idx];
+    if (idx !== this.save.meleeTier + 1 || this.save.money < weapon.cost) return;
+    this.save.money -= weapon.cost;
+    this.save.meleeTier = idx;
+    this.player.refreshLoadout(this.save);
+    this.persist();
+    this.openUpgradeMenu(this.menuMode);
+    this.updateHUDStatic();
+  }
+
+  buyRangedWeapon(idx) {
+    const weapon = RANGED_WEAPONS[idx];
+    if (idx !== this.save.rangedTier + 1 || this.save.money < weapon.cost) return;
+    if (weapon.minZone && this.save.bestZone < weapon.minZone) return;
+    this.save.money -= weapon.cost;
+    this.save.rangedTier = idx;
+    this.player.refreshLoadout(this.save);
+    this.persist();
+    this.openUpgradeMenu(this.menuMode);
+    this.updateHUDStatic();
   }
 
   setState(state) {
@@ -804,6 +1098,26 @@ class Game {
       document.getElementById("dash-indicator").appendChild(fill);
     }
     fill.style.width = `${dashFrac * 100}%`;
+
+    const weaponLabel = document.getElementById("weapon-label");
+    weaponLabel.textContent = this.player.ranged
+      ? `${this.player.melee.name} · ${this.player.ranged.name}`
+      : this.player.melee.name;
+
+    const rangedIndicator = document.getElementById("ranged-indicator");
+    if (this.player.ranged) {
+      rangedIndicator.classList.remove("hidden");
+      const rFrac = 1 - clamp(this.player.rangedCooldownTimer / this.player.ranged.cooldown, 0, 1);
+      let rFill = rangedIndicator.querySelector(".fill");
+      if (!rFill) {
+        rFill = document.createElement("div");
+        rFill.className = "fill ranged-fill";
+        rangedIndicator.appendChild(rFill);
+      }
+      rFill.style.width = `${rFrac * 100}%`;
+    } else {
+      rangedIndicator.classList.add("hidden");
+    }
   }
 
   update(dt) {
@@ -825,6 +1139,19 @@ class Game {
       enemy.update(dt, this.player, this);
     }
     this.enemies = this.enemies.filter(e => !e.dead);
+
+    for (const proj of this.projectiles) {
+      if (proj.dead) continue;
+      proj.update(dt);
+      for (const enemy of this.enemies) {
+        if (enemy.dead || proj.dead) continue;
+        if (dist(proj.x, proj.y, enemy.x, enemy.y) <= proj.radius + enemy.radius) {
+          this.damageEnemy(enemy, proj.damage);
+          proj.dead = true;
+        }
+      }
+    }
+    this.projectiles = this.projectiles.filter(p => !p.dead);
 
     for (const ft of this.floatingTexts) ft.update(dt);
     this.floatingTexts = this.floatingTexts.filter(ft => !ft.dead);
@@ -875,6 +1202,7 @@ class Game {
   draw() {
     this.drawBackground();
     for (const enemy of this.enemies) enemy.draw(this.ctx);
+    for (const proj of this.projectiles) proj.draw(this.ctx);
     this.player.draw(this.ctx);
     for (const ft of this.floatingTexts) ft.draw(this.ctx);
   }
