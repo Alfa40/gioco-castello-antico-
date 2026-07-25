@@ -164,6 +164,16 @@ canvas {
   box-shadow: 0 20px 60px rgba(0,0,0,0.5);
 }
 
+.hero-portrait {
+  width: 120px;
+  height: 120px;
+  object-fit: cover;
+  border-radius: 50%;
+  border: 2px solid var(--panel-border);
+  box-shadow: 0 0 24px rgba(232, 163, 61, 0.25);
+  margin-bottom: 10px;
+}
+
 h1 { margin: 0 0 4px; font-size: 34px; letter-spacing: 0.5px; color: var(--accent); }
 h2 { margin: 0 0 4px; color: var(--accent); }
 .tagline { color: var(--muted); margin: 0 0 16px; font-style: italic; }
@@ -206,11 +216,29 @@ h2 { margin: 0 0 4px; color: var(--accent); }
   gap: 6px;
 }
 .legend-item { display: flex; align-items: center; gap: 8px; }
+.legend-portrait {
+  width: 28px;
+  height: 28px;
+  object-fit: cover;
+  border-radius: 50%;
+  flex-shrink: 0;
+  border: 1px solid var(--panel-border);
+}
 .legend-dot {
   width: 10px;
   height: 10px;
   border-radius: 50%;
   flex-shrink: 0;
+}
+
+.weapon-reference {
+  display: block;
+  width: 100%;
+  max-height: 160px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid var(--panel-border);
+  margin-bottom: 10px;
 }
 
 .section-title {
