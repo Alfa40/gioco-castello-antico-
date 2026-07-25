@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Quartiere Ostile</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="game-container">
+  <canvas id="gameCanvas" width="960" height="600"></canvas>
+
+  <div id="hud" class="hidden">
+    <div class="hud-left">
+      <div class="hp-bar"><div id="hp-fill" class="hp-fill"></div><span id="hp-label" class="hp-label">100 / 100</span></div>
+      <div id="dash-indicator" class="dash-indicator"></div>
+    </div>
+    <div class="hud-center">
+      <div id="zone-label" class="zone-label">Zona 1 — Ai margini del quartiere</div>
+      <div id="wave-label" class="wave-label">Nemici rimasti: 0</div>
+    </div>
+    <div class="hud-right">
+      <div id="money-label" class="money-label">€ 0</div>
+      <button id="mute-btn" class="icon-btn" title="Muto">🔊</button>
+    </div>
+  </div>
+
+  <div id="start-screen" class="overlay">
+    <div class="panel">
+      <h1>Quartiere Ostile</h1>
+      <p class="tagline">Sei un ragazzo qualunque. Il quartiere no.</p>
+      <p class="desc">
+        Ogni notte i criminali di strada provano ad assaltarti per portarti via tutto.
+        Difenditi, mettili K.O. e usa i soldi guadagnati per rinforzare casa tua.
+        Più ti addentri nel quartiere, più diventano veloci e aggressivi.
+      </p>
+      <div class="controls">
+        <div><b>WASD / Frecce</b> — Movimento</div>
+        <div><b>Spazio</b> — Attacca</div>
+        <div><b>Shift</b> — Scatto (schivata)</div>
+        <div><b>U</b> — Potenzia casa / Pausa</div>
+      </div>
+      <div id="save-summary" class="save-summary hidden">
+        Salvataggio trovato: <span id="save-money"></span>€, zona migliore <span id="save-zone"></span>
+      </div>
+      <button id="start-btn" class="btn-primary">Entra nel quartiere</button>
+    </div>
+  </div>
+
+  <div id="upgrade-screen" class="overlay hidden">
+    <div class="panel">
+      <h2 id="upgrade-title">Potenzia casa</h2>
+      <p id="upgrade-subtitle" class="tagline"></p>
+      <div id="upgrade-list" class="upgrade-list"></div>
+      <div class="upgrade-footer">
+        <div id="upgrade-money" class="money-label">€ 0</div>
+        <button id="upgrade-continue-btn" class="btn-primary">Continua</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="gameover-screen" class="overlay hidden">
+    <div class="panel">
+      <h1 class="gameover-title">Sopraffatto</h1>
+      <p class="desc">Ti hanno steso prima che tornassi a casa. Ma quello che hai guadagnato resta tuo.</p>
+      <div class="stats">
+        <div>Zona raggiunta: <span id="final-zone"></span></div>
+        <div>Soldi guadagnati in questa run: <span id="final-money"></span> €</div>
+        <div>Totale risparmi: <span id="final-total-money"></span> €</div>
+      </div>
+      <button id="restart-btn" class="btn-primary">Riprova</button>
+    </div>
+  </div>
+
+  <div id="pause-hint" class="pause-hint hidden">U: Potenzia casa · Spazio: Attacca · Shift: Scatto</div>
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
