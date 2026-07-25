@@ -170,6 +170,14 @@ h2 { margin: 0 0 4px; color: var(--accent); }
   color: #c7cad1;
 }
 
+.gamepad-status {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 14px;
+  text-align: center;
+}
+.gamepad-status.gamepad-connected { color: var(--money); }
+
 .enemy-legend {
   text-align: left;
   background: rgba(255,255,255,0.03);

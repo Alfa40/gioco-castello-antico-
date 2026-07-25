@@ -14,6 +14,18 @@ Apri `index.html` in un browser (o servilo con un semplice server statico, es. `
 - **Shift** — Scatto/schivata (breve invulnerabilità)
 - **U** / **Esc** — Pausa e menu potenziamenti casa
 
+### Controller (es. DualShock 4 via Bluetooth)
+
+Il gioco usa la Gamepad API del browser: nessuna configurazione richiesta, basta abbinare il controller via Bluetooth nel sistema operativo, aprire la pagina e **premere un tasto sul controller** (i browser espongono il gamepad solo dopo una prima pressione, per motivi di privacy). Lo stato della connessione compare nella schermata iniziale.
+
+- **Levetta sinistra / D-pad** — Movimento
+- **✕ (Cross)** — Attacca in mischia
+- **R2** — Spara con l'arma a distanza
+- **○ (Circle)** — Scatto/schivata
+- **Options** — Pausa e menu potenziamenti casa
+
+L'acquisto di potenziamenti/armi nel negozio richiede ancora mouse o tastiera: il controller copre il gameplay in tempo reale, non la navigazione dei menu.
+
 ## Il loop di gioco
 
 - Sconfiggi i nemici di ogni zona per guadagnare soldi.

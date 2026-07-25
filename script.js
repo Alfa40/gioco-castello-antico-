@@ -759,6 +759,21 @@ class Enemy {
 /* =========================================================
    INPUT
 ========================================================= */
+// Standard Gamepad mapping (DualShock 4 over Bluetooth or USB is recognized
+// as a "standard" gamepad by Chrome/Edge/Firefox): left stick + D-pad move,
+// Cross attacks, R2 shoots, Circle dashes, Options opens the upgrade menu.
+const GAMEPAD_BUTTONS = {
+  attack: 0, // Cross
+  dash: 1, // Circle
+  ranged: 7, // R2
+  menu: 9, // Options
+  dpadUp: 12,
+  dpadDown: 13,
+  dpadLeft: 14,
+  dpadRight: 15,
+};
+const GAMEPAD_STICK_DEADZONE = 0.25;
+
 class InputHandler {
   constructor() {
     this.keys = new Set();
@@ -774,6 +789,16 @@ class InputHandler {
     this.onRangedAttack = null;
     this.onDash = null;
     this.onToggleMenu = null;
+
+    this.gamepadConnected = false;
+    this.gpMove = { up: false, down: false, left: false, right: false };
+    this.gpAttack = false;
+    this.gpRanged = false;
+    this.gpDash = false;
+    this._gpMenuWasDown = false;
+
+    window.addEventListener("gamepadconnected", () => this.onGamepadStatusChange());
+    window.addEventListener("gamepaddisconnected", () => this.onGamepadStatusChange());
   }
   handleDown(e) {
     if (this.map[e.code]) { this.keys.add(this.map[e.code]); }
@@ -785,7 +810,54 @@ class InputHandler {
   handleUp(e) {
     if (this.map[e.code]) { this.keys.delete(this.map[e.code]); }
   }
-  isDown(dir) { return this.keys.has(dir); }
+
+  onGamepadStatusChange() {
+    const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+    const connected = Array.from(pads).some(g => g && g.connected);
+    const el = document.getElementById("gamepad-status");
+    if (el) {
+      el.textContent = connected
+        ? "🎮 Controller connesso"
+        : "🎮 Nessun controller — premi un tasto sul controller per attivarlo";
+      el.classList.toggle("gamepad-connected", connected);
+    }
+  }
+
+  // Polled once per frame (independent of game state, so Options can still
+  // close the pause menu, and the connection status stays up to date).
+  pollGamepad() {
+    const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+    const gp = Array.from(pads).find(g => g && g.connected);
+    if (gp !== undefined && this.gamepadConnected !== !!gp) {
+      this.gamepadConnected = !!gp;
+      this.onGamepadStatusChange();
+    }
+    if (!gp) {
+      this.gpMove = { up: false, down: false, left: false, right: false };
+      this.gpAttack = this.gpRanged = this.gpDash = false;
+      return;
+    }
+
+    const lx = gp.axes[0] || 0;
+    const ly = gp.axes[1] || 0;
+    const b = idx => !!(gp.buttons[idx] && gp.buttons[idx].pressed);
+
+    this.gpMove = {
+      left: lx < -GAMEPAD_STICK_DEADZONE || b(GAMEPAD_BUTTONS.dpadLeft),
+      right: lx > GAMEPAD_STICK_DEADZONE || b(GAMEPAD_BUTTONS.dpadRight),
+      up: ly < -GAMEPAD_STICK_DEADZONE || b(GAMEPAD_BUTTONS.dpadUp),
+      down: ly > GAMEPAD_STICK_DEADZONE || b(GAMEPAD_BUTTONS.dpadDown),
+    };
+    this.gpAttack = b(GAMEPAD_BUTTONS.attack);
+    this.gpRanged = b(GAMEPAD_BUTTONS.ranged);
+    this.gpDash = b(GAMEPAD_BUTTONS.dash);
+
+    const menuDown = b(GAMEPAD_BUTTONS.menu);
+    if (menuDown && !this._gpMenuWasDown && this.onToggleMenu) this.onToggleMenu();
+    this._gpMenuWasDown = menuDown;
+  }
+
+  isDown(dir) { return this.keys.has(dir) || this.gpMove[dir]; }
 }
 
 /* =========================================================
@@ -1254,6 +1326,12 @@ class Game {
     if (this.state !== "playing") return;
 
     this.player.update(dt, this.input);
+    // Attack/shoot/dash are held down rather than edge-triggered (there's no
+    // "keydown" equivalent for a polled gamepad); their own cooldowns already
+    // throttle this the same way holding a keyboard key would.
+    if (this.input.gpAttack) this.player.tryAttack(this);
+    if (this.input.gpRanged) this.player.tryRangedAttack(this);
+    if (this.input.gpDash) this.player.tryDash();
 
     if (this.enemiesToSpawn > 0) {
       this.spawnTimer -= dt;
@@ -1351,6 +1429,7 @@ class Game {
   loop(now) {
     const dt = Math.min(0.05, (now - this.lastTime) / 1000);
     this.lastTime = now;
+    this.input.pollGamepad();
     this.update(dt);
     this.draw();
     requestAnimationFrame(this.loop);
