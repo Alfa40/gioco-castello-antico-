@@ -2,13 +2,28 @@
 <html lang="it">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>Quartiere Ostile</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<div id="viewport-center">
 <div id="game-container">
   <canvas id="gameCanvas" width="960" height="600"></canvas>
+
+  <div id="touch-controls">
+    <div id="joystick-base" class="joystick-base">
+      <div id="joystick-knob" class="joystick-knob"></div>
+    </div>
+    <button id="touch-pause" class="touch-btn touch-btn-pause" title="Pausa">⏸</button>
+    <div id="touch-action-cluster">
+      <button id="touch-bomb-select" class="touch-btn touch-btn-tiny" title="Cambia esplosivo">🔄</button>
+      <button id="touch-bomb-throw" class="touch-btn touch-btn-small" title="Lancia esplosivo">💣</button>
+      <button id="touch-fire" class="touch-btn touch-btn-medium hidden" title="Spara">🔫</button>
+      <button id="touch-dash" class="touch-btn touch-btn-medium" title="Scatto">⚡</button>
+      <button id="touch-attack" class="touch-btn touch-btn-large" title="Attacca">👊</button>
+    </div>
+  </div>
 
   <div id="hud" class="hidden">
     <div class="hud-left">
@@ -134,6 +149,12 @@
   </div>
 
   <div id="pause-hint" class="pause-hint hidden">U: Potenzia casa · Spazio: Attacca · F: Spara · Shift: Scatto · 1-5: Scegli esplosivo · G: Lancia</div>
+</div>
+</div>
+
+<div id="rotate-prompt" class="rotate-prompt">
+  <div class="rotate-icon">📱</div>
+  <p>Ruota il telefono in orizzontale per giocare</p>
 </div>
 
 <script src="script.js"></script>
