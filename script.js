@@ -11,7 +11,7 @@ const CONFIG = {
 
   player: {
     baseSpeed: 220,
-    baseMaxHP: 150,
+    baseMaxHP: 250,
     attackArc: Math.PI * 1.3, // visual swing only; hit detection is a full circle around the player
     dashSpeed: 640,
     dashDuration: 0.16,
