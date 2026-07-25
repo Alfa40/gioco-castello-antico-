@@ -49,6 +49,11 @@ const CONFIG = {
     cooldownFactorPerZone: 0.045, // reduces cooldown -> faster attacks
     minCooldown: 0.35,
     moneyPerZone: 0.10,
+    // Separate, much slower scaling tied to the player's own power (see
+    // Game.playerLevel): the more upgrades/weapons bought, the tougher
+    // enemies get too, so fully kitting out doesn't trivialize the run.
+    hpPerPlayerLevel: 0.02,
+    damagePerPlayerLevel: 0.02,
   },
 
   waves: {
@@ -124,23 +129,90 @@ const UPGRADES = [
   },
 ];
 
-// Sequential melee tiers: each purchase replaces the previous weapon.
-// Knives trade range for speed/damage; bats and poles trade speed for reach.
+// Sequential melee tiers: each purchase replaces the previous weapon. Every
+// tier (but fists) has 1-2 small sub-upgrades that must ALL be bought before
+// the next tier becomes purchasable. Within the same archetype (knife -> better
+// knife, bat -> pole) a fully upgraded tier still stays behind the next tier's
+// base stats, so there's always a reason to move on; across the knife -> bat
+// jump the comparison is apples-to-oranges by design (knives trade range for
+// attack speed, bats/poles trade speed for reach and burst), so a maxed-out
+// knife can out-DPS a stock bat in a straight line — the bat's case is its
+// much longer reach against groups, not raw single-target DPS.
 const MELEE_WEAPONS = [
-  { id: "fists", name: "Pugni", desc: "Le tue mani. Gratis, ma poco convincenti.", cost: 0, damage: 18, range: 52, cooldown: 0.42 },
-  { id: "knife1", name: "Coltello", desc: "Taglia in fretta: più danno e colpi più veloci.", cost: 60, damage: 26, range: 50, cooldown: 0.32 },
-  { id: "knife2", name: "Coltello a serramanico", desc: "Lama migliore: ancora più danno e velocità.", cost: 140, damage: 36, range: 50, cooldown: 0.24 },
-  { id: "bat", name: "Mazza da baseball", desc: "Più lenta, ma colpisce molto più lontano e più forte.", cost: 260, damage: 50, range: 78, cooldown: 0.55 },
-  { id: "pole", name: "Palo d'acciaio", desc: "Portata e danno massimi. Non fa sconti.", cost: 420, damage: 68, range: 94, cooldown: 0.62 },
+  {
+    id: "fists", name: "Pugni", desc: "Le tue mani. Gratis, ma poco convincenti.",
+    cost: 0, damage: 18, range: 52, cooldown: 0.42, upgrades: [],
+  },
+  {
+    id: "knife1", name: "Coltello", desc: "Taglia in fretta: più danno e colpi più veloci.",
+    cost: 60, damage: 26, range: 50, cooldown: 0.32,
+    upgrades: [
+      { id: "knife1_grip", name: "Impugnatura migliorata", desc: "Colpi leggermente più veloci.", cost: 45, cooldownMult: 0.9 },
+      { id: "knife1_blade", name: "Lama più affilata", desc: "Più danno per colpo.", cost: 55, damage: 6 },
+    ],
+  },
+  {
+    id: "knife2", name: "Coltello a serramanico", desc: "Lama migliore: ancora più danno e velocità.",
+    cost: 140, damage: 36, range: 50, cooldown: 0.24,
+    upgrades: [
+      { id: "knife2_grip", name: "Impugnatura rinforzata", desc: "Colpi ancora più veloci.", cost: 90, cooldownMult: 0.9 },
+      { id: "knife2_blade", name: "Lama temprata", desc: "Più danno per colpo.", cost: 110, damage: 8 },
+    ],
+  },
+  {
+    id: "bat", name: "Mazza da baseball", desc: "Più lenta, ma colpisce molto più lontano e più forte.",
+    cost: 260, damage: 50, range: 78, cooldown: 0.55,
+    upgrades: [
+      { id: "bat_spikes", name: "Mazza chiodata", desc: "Chiodi che aumentano il danno.", cost: 160, damage: 14 },
+    ],
+  },
+  {
+    id: "pole", name: "Palo d'acciaio", desc: "Portata e danno massimi. Non fa sconti.",
+    cost: 420, damage: 75, range: 94, cooldown: 0.6,
+    upgrades: [
+      { id: "pole_reinforced", name: "Palo rinforzato", desc: "Struttura rinforzata: ancora più danno.", cost: 220, damage: 18 },
+    ],
+  },
 ];
 
 // Ranged weapons are a separate, optional loadout slot (key F) unlocked once
-// the current run has reached a deep enough zone. Also sequential. Each has a
-// capped ammo pool (no unlimited spray) refilled by kills or the zone shop.
+// the current run has reached a deep enough zone. Also sequential, also
+// gated behind fully upgrading the current gun. Each has a capped ammo pool
+// (no unlimited spray) refilled by kills or the zone shop.
 const RANGED_WEAPONS = [
-  { id: "pistol", name: "Pistola", desc: "Colpisce a distanza. Cadenza moderata.", cost: 220, damage: 22, cooldown: 0.6, projectileSpeed: 560, minZone: 3, maxAmmo: 24, costPerAmmo: 6 },
-  { id: "smg", name: "Mitra", desc: "Raffica rapida, danno per colpo minore.", cost: 480, damage: 13, cooldown: 0.14, projectileSpeed: 640, minZone: 5, maxAmmo: 60, costPerAmmo: 4 },
+  {
+    id: "pistol", name: "Pistola", desc: "Colpisce a distanza. Cadenza moderata.",
+    cost: 220, damage: 22, cooldown: 0.6, projectileSpeed: 560, minZone: 3, maxAmmo: 24, costPerAmmo: 6,
+    upgrades: [
+      { id: "pistol_sight", name: "Mirino", desc: "Aggancia i bersagli con più margine.", cost: 80, aimConeBonus: 0.06 },
+      { id: "pistol_stock", name: "Calcio", desc: "Cadenza di fuoco più rapida.", cost: 90, cooldownMult: 0.9 },
+      { id: "pistol_barrel", name: "Canna lunga", desc: "Più danno per colpo.", cost: 100, damage: 5 },
+      { id: "pistol_mag", name: "Caricatore esteso", desc: "Più munizioni massime.", cost: 70, maxAmmo: 8 },
+    ],
+  },
+  {
+    id: "smg", name: "Mitra", desc: "Raffica rapida, danno per colpo minore.",
+    cost: 480, damage: 13, cooldown: 0.14, projectileSpeed: 640, minZone: 5, maxAmmo: 60, costPerAmmo: 4,
+    upgrades: [
+      { id: "smg_sight", name: "Mirino", desc: "Aggancia i bersagli con più margine.", cost: 150, aimConeBonus: 0.06 },
+      { id: "smg_stock", name: "Calcio", desc: "Cadenza di fuoco più rapida.", cost: 170, cooldownMult: 0.9 },
+      { id: "smg_barrel", name: "Canna lunga", desc: "Più danno per colpo.", cost: 190, damage: 3 },
+      { id: "smg_mag", name: "Caricatore esteso", desc: "Più munizioni massime.", cost: 140, maxAmmo: 15 },
+    ],
+  },
 ];
+
+// Consumable throwables, bought in stacks (not sequential tiers) and thrown
+// along the current aim. Expensive on purpose — a panic button, not a main weapon.
+const THROWABLES = [
+  { id: "grenade", name: "Granata", desc: "Esplosione che infligge danno pesante in un'area.", cost: 150, kind: "damage", radius: 70, damage: 70, fuse: 1.1, maxCarry: 5 },
+  { id: "molotov", name: "Molotov", desc: "Crea una pozza di fuoco che brucia i nemici per qualche secondo.", cost: 180, kind: "fire", radius: 60, damagePerSecond: 22, duration: 3.5, fuse: 0.6, maxCarry: 5 },
+  { id: "sticky", name: "Bomba adesiva", desc: "Si attacca al primo nemico colpito ed esplode con danno enorme.", cost: 260, kind: "damage", radius: 55, damage: 130, fuse: 1.4, maxCarry: 4, sticky: true },
+  { id: "smoke", name: "Granata fumogena", desc: "Acceca i nemici nella zona: smettono di inseguirti per qualche secondo.", cost: 200, kind: "cc", ccType: "smoke", radius: 100, duration: 4, fuse: 0.5, maxCarry: 4 },
+  { id: "flashbang", name: "Granata stordente", desc: "Stordisce i nemici vicini, bloccandoli sul posto per qualche secondo.", cost: 220, kind: "cc", ccType: "stun", radius: 110, duration: 2.5, fuse: 0.4, maxCarry: 4 },
+];
+const THROW_RANGE = 260;
+const THROW_CONE = Math.PI / 6;
 
 // Three enemy archetypes with distinct movement/attack behavior, not just
 // stat multipliers, so they read as different threats at a glance.
@@ -184,7 +256,59 @@ const ENEMY_TYPES = [
     minZone: 3,
     weight: (zone) => (zone < 3 ? 0 : 0.25 + (zone - 3) * 0.15),
   },
+  {
+    id: "bruto",
+    label: "Bruto",
+    color: "#5c2626",
+    radiusMult: 1.5,
+    speedMult: 0.42,
+    hpMult: 1.6,
+    damageMult: 2.3,
+    cooldownMult: 1.3, // heavy wind-up between hits, to offset how hard they land
+    behavior: "steady", // direct pursuit, same as Balordo, just much slower and scarier
+    minZone: 4,
+    weight: (zone) => (zone < 4 ? 0 : 0.18 + (zone - 4) * 0.05),
+  },
+  {
+    id: "tiratore",
+    label: "Tiratore",
+    color: "#4a6b7a",
+    radiusMult: 0.85,
+    speedMult: 0.85,
+    hpMult: 0.55, // fragile — the threat is the gun, not a melee trade
+    damageMult: 0.8, // low melee fallback damage if it gets cornered
+    cooldownMult: 1.0,
+    behavior: "ranged",
+    minZone: 5,
+    preferredRange: 260,
+    projectileSpeed: 420,
+    projectileDamageMult: 1.0,
+    attackRangeOverride: 260, // used as the firing range for this type, not melee reach
+    detectRangeOverride: 420,
+    weight: (zone) => (zone < 5 ? 0 : 0.15 + (zone - 5) * 0.07),
+  },
 ];
+
+// Aggregates the purchased per-tier upgrades of a weapon into flat stat deltas.
+function sumWeaponUpgrades(weaponEntry, ownedIds) {
+  const owned = new Set(ownedIds || []);
+  const totals = { damage: 0, range: 0, cooldownMult: 1, maxAmmo: 0, aimConeBonus: 0 };
+  for (const upg of weaponEntry.upgrades || []) {
+    if (!owned.has(upg.id)) continue;
+    if (upg.damage) totals.damage += upg.damage;
+    if (upg.range) totals.range += upg.range;
+    if (upg.cooldownMult) totals.cooldownMult *= upg.cooldownMult;
+    if (upg.maxAmmo) totals.maxAmmo += upg.maxAmmo;
+    if (upg.aimConeBonus) totals.aimConeBonus += upg.aimConeBonus;
+  }
+  return totals;
+}
+
+function allWeaponUpgradesOwned(weaponEntry, ownedIds) {
+  if (!weaponEntry) return true; // no current weapon (e.g. no ranged weapon owned yet) — nothing to gate on
+  const owned = new Set(ownedIds || []);
+  return (weaponEntry.upgrades || []).every(u => owned.has(u.id));
+}
 
 function pickEnemyType(zone) {
   const candidates = ENEMY_TYPES.filter(t => zone >= t.minZone);
@@ -240,6 +364,8 @@ const SoundManager = {
   emptyClick() { this.beep(140, 0.05, "square", 0.03); },
   heal() { this.beep(520, 0.12, "sine", 0.05); },
   ammoPickup() { this.beep(660, 0.06, "square", 0.04); },
+  throwBomb() { this.beep(300, 0.08, "sine", 0.04); },
+  explosion() { this.beep(70, 0.35, "sawtooth", 0.09); },
   wave() { this.beep(220, 0.3, "triangle", 0.06); },
   gameover() { this.beep(80, 0.5, "sawtooth", 0.08); },
 };
@@ -252,7 +378,16 @@ const SoundManager = {
 function createRunState() {
   const upgrades = {};
   UPGRADES.forEach(u => { upgrades[u.id] = 0; });
-  return { money: 0, upgrades, meleeTier: 0, rangedTier: -1 };
+  return {
+    money: 0,
+    upgrades,
+    meleeTier: 0,
+    rangedTier: -1,
+    meleeWeaponUpgrades: [], // ids of purchased per-tier weapon upgrades
+    rangedWeaponUpgrades: [],
+    bombs: {}, // { [throwableId]: count }
+    playerLevel: 0, // grows with power purchases; feeds a slow extra enemy scaling
+  };
 }
 
 /* =========================================================
@@ -289,12 +424,13 @@ class FloatingText {
    PROJECTILE (fired by ranged weapons)
 ========================================================= */
 class Projectile {
-  constructor(x, y, angle, speed, damage) {
+  constructor(x, y, angle, speed, damage, owner = "player") {
     this.x = x;
     this.y = y;
     this.vx = Math.cos(angle) * speed;
     this.vy = Math.sin(angle) * speed;
     this.damage = damage;
+    this.owner = owner; // "player" | "enemy" — decides who it can hit
     this.radius = 6;
     this.dead = false;
   }
@@ -307,7 +443,7 @@ class Projectile {
   }
   draw(ctx) {
     ctx.save();
-    ctx.fillStyle = "#ffe27a";
+    ctx.fillStyle = this.owner === "enemy" ? "#ff6a6a" : "#ffe27a";
     ctx.beginPath();
     ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
     ctx.fill();
@@ -369,6 +505,97 @@ class Pickup {
 }
 
 /* =========================================================
+   BOMB (thrown consumables: grenades, molotov, sticky, smoke, stun)
+========================================================= */
+class Bomb {
+  constructor(type, x, y, stickTarget) {
+    this.type = type;
+    this.x = x;
+    this.y = y;
+    this.stickTarget = stickTarget || null; // Enemy instance the sticky bomb is riding, if any
+    this.fuse = type.fuse;
+    this.exploded = false;
+    this.effectTimer = 0;
+    this.tickTimer = 0;
+    this.dead = false;
+  }
+
+  update(dt, game) {
+    if (this.stickTarget && !this.stickTarget.dead) {
+      this.x = this.stickTarget.x;
+      this.y = this.stickTarget.y;
+    }
+
+    if (!this.exploded) {
+      this.fuse -= dt;
+      if (this.fuse <= 0) this.detonate(game);
+      return;
+    }
+
+    if (this.type.kind === "fire") {
+      this.tickTimer -= dt;
+      if (this.tickTimer <= 0) {
+        this.tickTimer = 0.5;
+        for (const enemy of game.enemies) {
+          if (!enemy.dead && dist(enemy.x, enemy.y, this.x, this.y) <= this.type.radius) {
+            game.damageEnemy(enemy, this.type.damagePerSecond * 0.5);
+          }
+        }
+      }
+    } else if (this.type.kind === "cc") {
+      for (const enemy of game.enemies) {
+        if (!enemy.dead && dist(enemy.x, enemy.y, this.x, this.y) <= this.type.radius) {
+          enemy.ccTimer = this.type.duration;
+          enemy.ccType = this.type.ccType;
+        }
+      }
+    }
+
+    this.effectTimer -= dt;
+    if (this.effectTimer <= 0) this.dead = true;
+  }
+
+  detonate(game) {
+    this.exploded = true;
+    SoundManager.explosion();
+    if (this.type.kind === "damage") {
+      for (const enemy of game.enemies) {
+        if (!enemy.dead && dist(enemy.x, enemy.y, this.x, this.y) <= this.type.radius) {
+          game.damageEnemy(enemy, this.type.damage);
+        }
+      }
+      this.dead = true;
+    } else {
+      this.effectTimer = this.type.duration;
+    }
+  }
+
+  draw(ctx) {
+    if (!this.exploded) {
+      ctx.save();
+      ctx.fillStyle = this.type.kind === "fire" ? "#ff8a3d" : this.type.kind === "cc" ? "#9fb0bd" : "#3a3a3a";
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, 7, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#000000aa";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.restore();
+      return;
+    }
+    if (this.dead) return;
+    ctx.save();
+    const frac = clamp(this.effectTimer / this.type.duration, 0, 1);
+    ctx.globalAlpha = 0.25 + frac * 0.35;
+    ctx.fillStyle = this.type.kind === "fire" ? "#ff5a2a" : this.type.ccType === "stun" ? "#ffe27a" : "#c7d3da";
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.type.radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+/* =========================================================
    PLAYER
 ========================================================= */
 class Player {
@@ -394,6 +621,9 @@ class Player {
     this.ranged = null; // computed from equipped ranged weapon, or null if unarmed
     this.ammo = 0; // rounds currently carried for the equipped ranged weapon
     this._rangedWeaponId = null; // tracks tier changes so ammo only refills on upgrade, not on every stat refresh
+    this._rangedMaxAmmo = null; // tracks capacity changes from magazine sub-upgrades
+
+    this.selectedThrowable = 0; // index into THROWABLES
   }
 
   refreshLoadout(run) {
@@ -421,32 +651,42 @@ class Player {
     };
 
     const meleeWeapon = MELEE_WEAPONS[run.meleeTier || 0];
+    const meleeBonus = sumWeaponUpgrades(meleeWeapon, run.meleeWeaponUpgrades);
+    const meleeCooldown = meleeWeapon.cooldown * meleeBonus.cooldownMult;
     this.melee = {
       name: meleeWeapon.name,
-      damage: meleeWeapon.damage + gymBonus,
-      range: meleeWeapon.range,
-      cooldown: meleeWeapon.cooldown,
-      activeTime: Math.min(0.18, meleeWeapon.cooldown * 0.4),
+      damage: meleeWeapon.damage + gymBonus + meleeBonus.damage,
+      range: meleeWeapon.range + meleeBonus.range,
+      cooldown: meleeCooldown,
+      activeTime: Math.min(0.18, meleeCooldown * 0.4),
     };
 
     const rangedIdx = run.rangedTier;
     if (rangedIdx != null && rangedIdx >= 0 && RANGED_WEAPONS[rangedIdx]) {
       const rw = RANGED_WEAPONS[rangedIdx];
+      const rangedBonus = sumWeaponUpgrades(rw, run.rangedWeaponUpgrades);
+      const newMaxAmmo = rw.maxAmmo + rangedBonus.maxAmmo;
       if (this._rangedWeaponId !== rw.id) {
         // Newly acquired or upgraded gun: hand it over freshly loaded.
-        this.ammo = rw.maxAmmo;
+        this.ammo = newMaxAmmo;
         this._rangedWeaponId = rw.id;
+      } else if (this._rangedMaxAmmo != null && newMaxAmmo > this._rangedMaxAmmo) {
+        // Same gun, but a magazine sub-upgrade just extended its capacity.
+        this.ammo += newMaxAmmo - this._rangedMaxAmmo;
       }
+      this._rangedMaxAmmo = newMaxAmmo;
       this.ranged = {
         name: rw.name,
-        damage: rw.damage + gymBonus * 0.5,
-        cooldown: rw.cooldown,
+        damage: rw.damage + gymBonus * 0.5 + rangedBonus.damage,
+        cooldown: rw.cooldown * rangedBonus.cooldownMult,
         projectileSpeed: rw.projectileSpeed,
-        maxAmmo: rw.maxAmmo,
+        maxAmmo: newMaxAmmo,
+        aimConeBonus: rangedBonus.aimConeBonus,
       };
     } else {
       this.ranged = null;
       this._rangedWeaponId = null;
+      this._rangedMaxAmmo = null;
       this.ammo = 0;
     }
   }
@@ -486,7 +726,7 @@ class Player {
   tryRangedAttack(game) {
     if (!this.ranged || this.rangedCooldownTimer > 0) return;
     if (this.ammo <= 0) { SoundManager.emptyClick(); return; }
-    const angle = game.aimAssist(this.x, this.y, this.aimAngle);
+    const angle = game.aimAssist(this.x, this.y, this.aimAngle, this.ranged.aimConeBonus);
     this.fireRanged(game, angle);
   }
 
@@ -495,7 +735,7 @@ class Player {
   // range, the gun keeps firing on its own — no trigger needed.
   autoFireRanged(game) {
     if (!this.ranged || this.rangedCooldownTimer > 0 || this.ammo <= 0) return;
-    const angle = game.findAutoFireAngle(this.x, this.y, this.aimAngle);
+    const angle = game.findAutoFireAngle(this.x, this.y, this.aimAngle, this.ranged.aimConeBonus);
     if (angle === null) return;
     this.fireRanged(game, angle);
   }
@@ -652,6 +892,13 @@ class Enemy {
     this.moveDir = { x: 0, y: 0 };
     this.moveSpeedMult = 1;
     this.erraticTimer = rand(0, 0.3);
+
+    // "ranged" behavior
+    this.strafeDir = Math.random() < 0.5 ? -1 : 1;
+
+    // crowd control from smoke/stun bombs
+    this.ccTimer = 0;
+    this.ccType = null; // "smoke" | "stun"
   }
 
   update(dt, player, game) {
@@ -659,9 +906,16 @@ class Enemy {
     if (this.attackCooldownTimer > 0) this.attackCooldownTimer -= dt;
     if (this.hitFlash > 0) this.hitFlash -= dt;
 
+    if (this.ccTimer > 0) {
+      this.ccTimer -= dt;
+      return; // stunned/blinded by a bomb: frozen in place for the duration
+    }
+
     const d = dist(this.x, this.y, player.x, player.y);
 
-    if (d <= this.stats.attackRange + this.radius) {
+    if (this.type.behavior === "ranged") {
+      this.updateRanged(dt, player, game, d);
+    } else if (d <= this.stats.attackRange + this.radius) {
       if (this.attackCooldownTimer <= 0) {
         this.attackCooldownTimer = this.stats.attackCooldown;
         const hit = player.takeDamage(this.stats.damage);
@@ -688,6 +942,36 @@ class Enemy {
     const margin = this.radius + 4;
     this.x = clamp(this.x, margin, CONFIG.width - margin);
     this.y = clamp(this.y, margin + 60, CONFIG.height - margin);
+  }
+
+  // Kites to stay near its preferred range instead of closing to melee, and
+  // fires a projectile at the player whenever it's within firing range.
+  updateRanged(dt, player, game, d) {
+    if (d > this.stats.detectRange) return; // hasn't noticed the player yet
+
+    const pref = this.type.preferredRange;
+    let dx = player.x - this.x, dy = player.y - this.y;
+    const len = Math.hypot(dx, dy) || 1;
+    dx /= len; dy /= len;
+
+    let dir = 0; // -1 retreat, 1 approach, 0 hold position
+    if (d < pref * 0.75) dir = -1;
+    else if (d > pref * 1.25) dir = 1;
+
+    if (dir !== 0) {
+      this.x += dx * dir * this.stats.speed * dt;
+      this.y += dy * dir * this.stats.speed * dt;
+    } else {
+      // small sideways strafe so it doesn't just stand still at range
+      this.x += -dy * this.strafeDir * this.stats.speed * 0.3 * dt;
+      this.y += dx * this.strafeDir * this.stats.speed * 0.3 * dt;
+    }
+
+    if (d <= this.stats.attackRange && this.attackCooldownTimer <= 0) {
+      this.attackCooldownTimer = this.stats.attackCooldown;
+      const angle = Math.atan2(player.y - this.y, player.x - this.x);
+      game.spawnEnemyProjectile(this.x, this.y, angle, this.type.projectileSpeed, this.stats.damage);
+    }
   }
 
   moveTowardBehavior(dt, player, d) {
@@ -784,6 +1068,15 @@ class Enemy {
     ctx.fillStyle = hpFrac > 0.4 ? "#d9455f" : "#ff8a3d";
     ctx.fillRect(0, 0, w * hpFrac, 4);
     ctx.restore();
+
+    if (this.ccTimer > 0) {
+      ctx.save();
+      ctx.fillStyle = this.ccType === "stun" ? "#ffe27a" : "#c7d3da";
+      ctx.font = "bold 12px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(this.ccType === "stun" ? "☆" : "?", this.x, this.y - this.radius - 14);
+      ctx.restore();
+    }
   }
 }
 
@@ -798,6 +1091,8 @@ const GAMEPAD_BUTTONS = {
   dash: 1, // Circle
   ranged: 7, // R2
   menu: 9, // Options
+  selectBomb: 4, // L1 — cycles the selected throwable
+  throwBomb: 5, // R1
   dpadUp: 12,
   dpadDown: 13,
   dpadLeft: 14,
@@ -820,6 +1115,8 @@ class InputHandler {
     this.onRangedAttack = null;
     this.onDash = null;
     this.onToggleMenu = null;
+    this.onThrowBomb = null;
+    this.onSelectBomb = null; // (delta) => void, cycles the selection
 
     this.gamepadConnected = false;
     this.gpMove = { up: false, down: false, left: false, right: false };
@@ -828,6 +1125,8 @@ class InputHandler {
     this.gpRanged = false;
     this.gpDash = false;
     this._gpMenuWasDown = false;
+    this._gpSelectWasDown = false;
+    this._gpThrowWasDown = false;
 
     window.addEventListener("gamepadconnected", () => this.onGamepadStatusChange());
     window.addEventListener("gamepaddisconnected", () => this.onGamepadStatusChange());
@@ -838,6 +1137,11 @@ class InputHandler {
     if (e.code === "KeyF") { if (this.onRangedAttack) this.onRangedAttack(); }
     if (e.code === "ShiftLeft" || e.code === "ShiftRight") { if (this.onDash) this.onDash(); }
     if (e.code === "KeyU" || e.code === "Escape") { if (this.onToggleMenu) this.onToggleMenu(); }
+    if (e.code === "KeyG") { if (this.onThrowBomb) this.onThrowBomb(); }
+    if (e.code.startsWith("Digit")) {
+      const n = parseInt(e.code.slice(5), 10);
+      if (n >= 1 && n <= 5 && this.onSelectBomb) this.onSelectBomb(n - 1, true);
+    }
   }
   handleUp(e) {
     if (this.map[e.code]) { this.keys.delete(this.map[e.code]); }
@@ -895,6 +1199,14 @@ class InputHandler {
     const menuDown = b(GAMEPAD_BUTTONS.menu);
     if (menuDown && !this._gpMenuWasDown && this.onToggleMenu) this.onToggleMenu();
     this._gpMenuWasDown = menuDown;
+
+    const selectDown = b(GAMEPAD_BUTTONS.selectBomb);
+    if (selectDown && !this._gpSelectWasDown && this.onSelectBomb) this.onSelectBomb(1, false);
+    this._gpSelectWasDown = selectDown;
+
+    const throwDown = b(GAMEPAD_BUTTONS.throwBomb);
+    if (throwDown && !this._gpThrowWasDown && this.onThrowBomb) this.onThrowBomb();
+    this._gpThrowWasDown = throwDown;
   }
 
   isDown(dir) { return this.keys.has(dir) || this.gpMove[dir]; }
@@ -913,6 +1225,8 @@ class Game {
     this.input.onRangedAttack = () => { if (this.state === "playing") this.player.tryRangedAttack(this); };
     this.input.onDash = () => { if (this.state === "playing") this.player.tryDash(); };
     this.input.onToggleMenu = () => this.toggleUpgradeMenu();
+    this.input.onThrowBomb = () => { if (this.state === "playing") this.throwBomb(); };
+    this.input.onSelectBomb = (value, absolute) => { if (this.state === "playing") this.selectBomb(value, absolute); };
 
     this.run = createRunState();
     this.player = new Player(CONFIG.width / 2, CONFIG.height / 2);
@@ -922,6 +1236,7 @@ class Game {
     this.enemies = [];
     this.projectiles = [];
     this.pickups = [];
+    this.bombs = [];
     this.floatingTexts = [];
 
     this.zone = 1;
@@ -967,16 +1282,21 @@ class Game {
     const s = CONFIG.enemy;
     const z = zone - 1;
     const sc = CONFIG.zoneScaling;
+    // Player level grows as upgrades/weapons get bought — a slow extra HP/damage
+    // tax so a fully-kitted-out player doesn't make the run trivially easy.
+    const lvl = this.run.playerLevel || 0;
+    const levelHpMult = 1 + sc.hpPerPlayerLevel * lvl;
+    const levelDamageMult = 1 + sc.damagePerPlayerLevel * lvl;
     return {
       speed: s.baseSpeed * (1 + sc.speedPerZone * z) * type.speedMult,
-      maxHP: Math.round(s.baseMaxHP * (1 + sc.hpPerZone * z) * type.hpMult),
-      damage: Math.round(s.baseDamage * (1 + sc.damagePerZone * z) * type.damageMult),
+      maxHP: Math.round(s.baseMaxHP * (1 + sc.hpPerZone * z) * type.hpMult * levelHpMult),
+      damage: Math.round(s.baseDamage * (1 + sc.damagePerZone * z) * type.damageMult * levelDamageMult),
       attackCooldown: Math.max(
         sc.minCooldown,
         s.attackCooldown * (1 - sc.cooldownFactorPerZone * z) * type.cooldownMult
       ),
-      attackRange: s.attackRange,
-      detectRange: s.detectRange,
+      attackRange: type.attackRangeOverride || s.attackRange,
+      detectRange: type.detectRangeOverride || s.detectRange,
       moneyRange: [
         Math.round(s.baseMoneyDrop[0] * (1 + sc.moneyPerZone * z)),
         Math.round(s.baseMoneyDrop[1] * (1 + sc.moneyPerZone * z)),
@@ -995,6 +1315,8 @@ class Game {
     this.enemies = [];
     this.projectiles = [];
     this.pickups = [];
+    this.bombs = [];
+    this.player.selectedThrowable = 0;
     this.floatingTexts = [];
     this.setState("playing");
     this.startZone();
@@ -1028,7 +1350,42 @@ class Game {
   }
 
   spawnProjectile(x, y, angle, speed, damage) {
-    this.projectiles.push(new Projectile(x, y, angle, speed, damage));
+    this.projectiles.push(new Projectile(x, y, angle, speed, damage, "player"));
+  }
+
+  spawnEnemyProjectile(x, y, angle, speed, damage) {
+    this.projectiles.push(new Projectile(x, y, angle, speed, damage, "enemy"));
+  }
+
+  // value/absolute: keyboard digit keys pass (index, true) to jump straight
+  // to a slot; the gamepad's L1 passes (1, false) to cycle forward by one.
+  selectBomb(value, absolute) {
+    const n = THROWABLES.length;
+    this.player.selectedThrowable = absolute ? value % n : (this.player.selectedThrowable + value + n) % n;
+  }
+
+  throwBomb() {
+    const type = THROWABLES[this.player.selectedThrowable];
+    if (!type) return;
+    const count = this.run.bombs[type.id] || 0;
+    if (count <= 0) { SoundManager.emptyClick(); return; }
+    this.run.bombs[type.id] = count - 1;
+
+    const angle = this.player.aimAngle;
+    let x, y, stickTarget = null;
+    if (type.sticky) {
+      stickTarget = this.findNearestInCone(this.player.x, this.player.y, angle, THROW_CONE, THROW_RANGE);
+    }
+    if (stickTarget) {
+      x = stickTarget.x;
+      y = stickTarget.y;
+    } else {
+      const margin = 20;
+      x = clamp(this.player.x + Math.cos(angle) * THROW_RANGE, margin, CONFIG.width - margin);
+      y = clamp(this.player.y + Math.sin(angle) * THROW_RANGE, margin, CONFIG.height - margin);
+    }
+    this.bombs.push(new Bomb(type, x, y, stickTarget));
+    SoundManager.throwBomb();
   }
 
   // Nearest living enemy within a cone around `angle`, or null if none.
@@ -1045,7 +1402,7 @@ class Game {
       if (diff > Math.PI) diff = Math.PI * 2 - diff;
       if (diff <= maxAngle && diff < bestDiff) {
         bestDiff = diff;
-        best = enemyAngle;
+        best = enemy;
       }
     }
     return best;
@@ -1053,15 +1410,16 @@ class Game {
 
   // Manual fire: snaps onto a nearby enemy if there is one, otherwise still
   // fires straight along the aim (a deliberate button press shouldn't be a no-op).
-  aimAssist(x, y, aim) {
-    const found = this.findNearestInCone(x, y, aim, Math.PI / 5, 480);
-    return found !== null ? found : aim;
+  aimAssist(x, y, aim, coneBonus = 0) {
+    const enemy = this.findNearestInCone(x, y, aim, Math.PI / 5 + coneBonus, 480);
+    return enemy ? Math.atan2(enemy.y - y, enemy.x - x) : aim;
   }
 
   // Auto-fire: only shoots when something is actually sitting in the aim
   // cone — silence otherwise, so the gun doesn't spray at nothing.
-  findAutoFireAngle(x, y, aim) {
-    return this.findNearestInCone(x, y, aim, Math.PI / 6, 480);
+  findAutoFireAngle(x, y, aim, coneBonus = 0) {
+    const enemy = this.findNearestInCone(x, y, aim, Math.PI / 6 + coneBonus, 480);
+    return enemy ? Math.atan2(enemy.y - y, enemy.x - x) : null;
   }
 
   damageEnemy(enemy, amount) {
@@ -1153,9 +1511,16 @@ class Game {
       btn.textContent = "Riprendi";
     }
     this.renderUpgradeList();
-    this.renderWeaponList("melee-weapon-list", MELEE_WEAPONS, this.run.meleeTier, (idx) => this.buyMeleeWeapon(idx));
-    this.renderWeaponList("ranged-weapon-list", RANGED_WEAPONS, this.run.rangedTier, (idx) => this.buyRangedWeapon(idx));
+    this.renderWeaponList("melee-weapon-list", MELEE_WEAPONS, this.run.meleeTier, this.run.meleeWeaponUpgrades, (idx) => this.buyMeleeWeapon(idx));
+    this.renderWeaponUpgrades("melee-weapon-upgrades-section", "melee-weapon-upgrades", MELEE_WEAPONS, this.run.meleeTier, this.run.meleeWeaponUpgrades, (id, cost) => this.buyMeleeWeaponUpgrade(id, cost));
+    this.renderWeaponList("ranged-weapon-list", RANGED_WEAPONS, this.run.rangedTier, this.run.rangedWeaponUpgrades, (idx) => this.buyRangedWeapon(idx));
+    if (this.run.rangedTier >= 0) {
+      this.renderWeaponUpgrades("ranged-weapon-upgrades-section", "ranged-weapon-upgrades", RANGED_WEAPONS, this.run.rangedTier, this.run.rangedWeaponUpgrades, (id, cost) => this.buyRangedWeaponUpgrade(id, cost));
+    } else {
+      document.getElementById("ranged-weapon-upgrades-section").classList.add("hidden");
+    }
     this.renderAmmoShop();
+    this.renderBombShop();
     document.getElementById("upgrade-screen").classList.remove("hidden");
   }
 
@@ -1198,6 +1563,7 @@ class Game {
           if (this.run.money >= cost) {
             this.run.money -= cost;
             this.run.upgrades[upg.id] = level + 1;
+            this.run.playerLevel++;
             this.player.refreshLoadout(this.run);
             this.renderUpgradeList();
             this.updateHUDStatic();
@@ -1211,14 +1577,17 @@ class Game {
 
   // Shared renderer for the sequential melee/ranged weapon tracks: only the
   // next tier is ever purchasable, earlier tiers show as owned, later ones
-  // as locked (optionally gated behind a minimum zone reached this run).
-  renderWeaponList(containerId, weapons, currentTier, onBuy) {
+  // as locked (behind a minimum zone reached this run, or behind fully
+  // upgrading the weapon currently in hand).
+  renderWeaponList(containerId, weapons, currentTier, ownedUpgradeIds, onBuy) {
     const list = document.getElementById(containerId);
     list.innerHTML = "";
     weapons.forEach((weapon, idx) => {
       const owned = idx <= currentTier;
       const isNext = idx === currentTier + 1;
       const zoneLocked = weapon.minZone && this.zone < weapon.minZone;
+      const currentWeapon = weapons[currentTier];
+      const upgradesComplete = allWeaponUpgradesOwned(currentWeapon, ownedUpgradeIds);
 
       const card = document.createElement("div");
       card.className = "upgrade-card";
@@ -1227,6 +1596,8 @@ class Game {
         statusHtml = `<span class="level">${idx === currentTier ? "In uso" : "Sbloccata"}</span><button disabled>Posseduta</button>`;
       } else if (!isNext) {
         statusHtml = `<span class="level">Bloccata</span><button disabled>Compra prima l'arma precedente</button>`;
+      } else if (!upgradesComplete) {
+        statusHtml = `<span class="level">Bloccata</span><button disabled>Completa prima i potenziamenti di ${currentWeapon.name}</button>`;
       } else if (zoneLocked) {
         statusHtml = `<span class="level">Bloccata</span><button disabled>Si sblocca alla zona ${weapon.minZone}</button>`;
       } else {
@@ -1235,18 +1606,58 @@ class Game {
       }
 
       card.innerHTML = `<h3>${weapon.name}</h3><p>${weapon.desc}</p><div class="row">${statusHtml}</div>`;
-      if (isNext && !zoneLocked) {
+      if (isNext && !zoneLocked && upgradesComplete) {
         card.querySelector("button").addEventListener("click", () => onBuy(idx));
       }
       list.appendChild(card);
     });
   }
 
+  // Per-tier weapon upgrades (grip/blade/spikes/scope/stock/barrel/mag...),
+  // shown for whichever tier is currently equipped. Buying every upgrade
+  // here is what unlocks the next weapon tier in the list above.
+  renderWeaponUpgrades(sectionId, containerId, weapons, currentTier, ownedUpgradeIds, onBuyUpgrade) {
+    const weapon = weapons[currentTier];
+    const section = document.getElementById(sectionId);
+    const container = document.getElementById(containerId);
+    if (!weapon || !weapon.upgrades || weapon.upgrades.length === 0) {
+      section.classList.add("hidden");
+      return;
+    }
+    section.classList.remove("hidden");
+    const heading = section.querySelector(".section-title");
+    if (heading) heading.textContent = `Potenzia: ${weapon.name}`;
+
+    const owned = new Set(ownedUpgradeIds);
+    container.innerHTML = "";
+    weapon.upgrades.forEach(upg => {
+      const isOwned = owned.has(upg.id);
+      const affordable = upg.cost <= this.run.money;
+      const card = document.createElement("div");
+      card.className = "upgrade-card";
+      card.innerHTML = `
+        <h3>${upg.name}</h3>
+        <p>${upg.desc}</p>
+        <div class="row">
+          <span class="level">&nbsp;</span>
+          <button ${isOwned || !affordable ? "disabled" : ""}>${isOwned ? "Posseduto" : `Acquista — ${upg.cost}€`}</button>
+        </div>
+      `;
+      if (!isOwned) {
+        card.querySelector("button").addEventListener("click", () => onBuyUpgrade(upg.id, upg.cost));
+      }
+      container.appendChild(card);
+    });
+  }
+
   buyMeleeWeapon(idx) {
     const weapon = MELEE_WEAPONS[idx];
+    const current = MELEE_WEAPONS[this.run.meleeTier];
     if (idx !== this.run.meleeTier + 1 || this.run.money < weapon.cost) return;
+    if (!allWeaponUpgradesOwned(current, this.run.meleeWeaponUpgrades)) return;
     this.run.money -= weapon.cost;
     this.run.meleeTier = idx;
+    this.run.playerLevel++;
     this.player.refreshLoadout(this.run);
     this.openUpgradeMenu(this.menuMode);
     this.updateHUDStatic();
@@ -1256,8 +1667,33 @@ class Game {
     const weapon = RANGED_WEAPONS[idx];
     if (idx !== this.run.rangedTier + 1 || this.run.money < weapon.cost) return;
     if (weapon.minZone && this.zone < weapon.minZone) return;
+    if (this.run.rangedTier >= 0) {
+      const current = RANGED_WEAPONS[this.run.rangedTier];
+      if (!allWeaponUpgradesOwned(current, this.run.rangedWeaponUpgrades)) return;
+    }
     this.run.money -= weapon.cost;
     this.run.rangedTier = idx;
+    this.run.playerLevel++;
+    this.player.refreshLoadout(this.run);
+    this.openUpgradeMenu(this.menuMode);
+    this.updateHUDStatic();
+  }
+
+  buyMeleeWeaponUpgrade(id, cost) {
+    if (this.run.meleeWeaponUpgrades.includes(id) || this.run.money < cost) return;
+    this.run.money -= cost;
+    this.run.meleeWeaponUpgrades.push(id);
+    this.run.playerLevel++;
+    this.player.refreshLoadout(this.run);
+    this.openUpgradeMenu(this.menuMode);
+    this.updateHUDStatic();
+  }
+
+  buyRangedWeaponUpgrade(id, cost) {
+    if (this.run.rangedWeaponUpgrades.includes(id) || this.run.money < cost) return;
+    this.run.money -= cost;
+    this.run.rangedWeaponUpgrades.push(id);
+    this.run.playerLevel++;
     this.player.refreshLoadout(this.run);
     this.openUpgradeMenu(this.menuMode);
     this.updateHUDStatic();
@@ -1308,6 +1744,44 @@ class Game {
     this.run.money -= cost;
     this.player.ammo += chunk;
     this.renderAmmoShop();
+    this.updateHUDStatic();
+  }
+
+  // Consumable throwables: bought one at a time, stacked up to maxCarry.
+  renderBombShop() {
+    const container = document.getElementById("bomb-shop");
+    container.innerHTML = "";
+    THROWABLES.forEach(type => {
+      const count = this.run.bombs[type.id] || 0;
+      const atCap = count >= type.maxCarry;
+      const affordable = type.cost <= this.run.money;
+      const card = document.createElement("div");
+      card.className = "upgrade-card";
+      card.innerHTML = `
+        <h3>${type.name}</h3>
+        <p>${type.desc}</p>
+        <div class="row">
+          <span class="level">In tasca: ${count}/${type.maxCarry}</span>
+          <button ${atCap || !affordable ? "disabled" : ""}>
+            ${atCap ? "Scorta piena" : `Acquista — ${type.cost}€`}
+          </button>
+        </div>
+      `;
+      if (!atCap) {
+        card.querySelector("button").addEventListener("click", () => this.buyBomb(type.id));
+      }
+      container.appendChild(card);
+    });
+  }
+
+  buyBomb(id) {
+    const type = THROWABLES.find(t => t.id === id);
+    if (!type) return;
+    const count = this.run.bombs[id] || 0;
+    if (count >= type.maxCarry || this.run.money < type.cost) return;
+    this.run.money -= type.cost;
+    this.run.bombs[id] = count + 1;
+    this.renderBombShop();
     this.updateHUDStatic();
   }
 
@@ -1370,6 +1844,10 @@ class Game {
     } else {
       rangedIndicator.classList.add("hidden");
     }
+
+    const bombType = THROWABLES[this.player.selectedThrowable];
+    const bombCount = this.run.bombs[bombType.id] || 0;
+    document.getElementById("bomb-label").textContent = `${bombType.name} x${bombCount}`;
   }
 
   update(dt) {
@@ -1404,11 +1882,19 @@ class Game {
     for (const proj of this.projectiles) {
       if (proj.dead) continue;
       proj.update(dt);
-      for (const enemy of this.enemies) {
-        if (enemy.dead || proj.dead) continue;
-        if (dist(proj.x, proj.y, enemy.x, enemy.y) <= proj.radius + enemy.radius) {
-          this.damageEnemy(enemy, proj.damage);
+      if (proj.owner === "enemy") {
+        if (!proj.dead && dist(proj.x, proj.y, this.player.x, this.player.y) <= proj.radius + this.player.radius) {
+          const hit = this.player.takeDamage(proj.damage);
+          if (hit) this.onPlayerHit();
           proj.dead = true;
+        }
+      } else {
+        for (const enemy of this.enemies) {
+          if (enemy.dead || proj.dead) continue;
+          if (dist(proj.x, proj.y, enemy.x, enemy.y) <= proj.radius + enemy.radius) {
+            this.damageEnemy(enemy, proj.damage);
+            proj.dead = true;
+          }
         }
       }
     }
@@ -1423,6 +1909,9 @@ class Game {
       }
     }
     this.pickups = this.pickups.filter(p => !p.dead);
+
+    for (const bomb of this.bombs) bomb.update(dt, this);
+    this.bombs = this.bombs.filter(b => !b.dead);
 
     for (const ft of this.floatingTexts) ft.update(dt);
     this.floatingTexts = this.floatingTexts.filter(ft => !ft.dead);
@@ -1472,6 +1961,7 @@ class Game {
 
   draw() {
     this.drawBackground();
+    for (const bomb of this.bombs) bomb.draw(this.ctx);
     for (const pickup of this.pickups) pickup.draw(this.ctx);
     for (const enemy of this.enemies) enemy.draw(this.ctx);
     for (const proj of this.projectiles) proj.draw(this.ctx);
