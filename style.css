@@ -154,6 +154,7 @@ h1 { margin: 0 0 4px; font-size: 34px; letter-spacing: 0.5px; color: var(--accen
 h2 { margin: 0 0 4px; color: var(--accent); }
 .tagline { color: var(--muted); margin: 0 0 16px; font-style: italic; }
 .desc { color: #c7cad1; line-height: 1.5; margin-bottom: 18px; }
+.desc.small { font-size: 13px; color: var(--muted); margin-bottom: 18px; }
 
 .controls {
   display: grid;

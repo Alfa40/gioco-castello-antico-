@@ -28,7 +28,18 @@ const CONFIG = {
     attackCooldown: 1.15,
     detectRange: 520,
     radius: 14,
-    baseMoneyDrop: [8, 15],
+    baseMoneyDrop: [10, 18],
+  },
+
+  // Pickups dropped by defeated enemies — the run has no progress carried
+  // between playthroughs, so these are the in-run safety net.
+  pickup: {
+    medikitChance: 0.16,
+    medikitHealFraction: 0.25, // of player maxHp
+    ammoChance: 0.22, // only rolled if the player owns a ranged weapon
+    ammoAmountRange: [3, 7],
+    lifespan: 14,
+    radius: 10,
   },
 
   zoneScaling: {
@@ -62,7 +73,7 @@ const UPGRADES = [
     name: "Palestra in cantina",
     desc: "Aumenta il danno dei tuoi colpi.",
     baseCost: 40,
-    growth: 1.55,
+    growth: 1.45,
     maxLevel: 6,
     perLevel: 3, // + damage
   },
@@ -71,7 +82,7 @@ const UPGRADES = [
     name: "Scarpe buone",
     desc: "Aumenta velocità di movimento e scatto.",
     baseCost: 35,
-    growth: 1.5,
+    growth: 1.4,
     maxLevel: 6,
     perLevel: 0.045, // multiplier bonus
   },
@@ -80,7 +91,7 @@ const UPGRADES = [
     name: "Giubbotto rinforzato",
     desc: "Riduce il danno che subisci.",
     baseCost: 45,
-    growth: 1.6,
+    growth: 1.48,
     maxLevel: 6,
     perLevel: 0.06, // damage reduction fraction
   },
@@ -89,7 +100,7 @@ const UPGRADES = [
     name: "Kit pronto soccorso",
     desc: "Aumenta i punti vita massimi.",
     baseCost: 50,
-    growth: 1.5,
+    growth: 1.42,
     maxLevel: 6,
     perLevel: 14, // + max hp
   },
@@ -98,7 +109,7 @@ const UPGRADES = [
     name: "Cassaforte",
     desc: "Riduce i soldi che i criminali riescono a rubarti.",
     baseCost: 55,
-    growth: 1.6,
+    growth: 1.48,
     maxLevel: 5,
     perLevel: 0.18, // steal reduction fraction
   },
@@ -107,7 +118,7 @@ const UPGRADES = [
     name: "Porta blindata",
     desc: "Recuperi un po' di vita all'inizio di ogni zona.",
     baseCost: 75,
-    growth: 1.75,
+    growth: 1.6,
     maxLevel: 3,
     perLevel: 0.12, // fraction of missing hp healed on new zone
   },
@@ -117,17 +128,18 @@ const UPGRADES = [
 // Knives trade range for speed/damage; bats and poles trade speed for reach.
 const MELEE_WEAPONS = [
   { id: "fists", name: "Pugni", desc: "Le tue mani. Gratis, ma poco convincenti.", cost: 0, damage: 18, range: 52, cooldown: 0.42 },
-  { id: "knife1", name: "Coltello", desc: "Taglia in fretta: più danno e colpi più veloci.", cost: 70, damage: 26, range: 50, cooldown: 0.32 },
-  { id: "knife2", name: "Coltello a serramanico", desc: "Lama migliore: ancora più danno e velocità.", cost: 170, damage: 36, range: 50, cooldown: 0.24 },
-  { id: "bat", name: "Mazza da baseball", desc: "Più lenta, ma colpisce molto più lontano e più forte.", cost: 320, damage: 50, range: 78, cooldown: 0.55 },
-  { id: "pole", name: "Palo d'acciaio", desc: "Portata e danno massimi. Non fa sconti.", cost: 520, damage: 68, range: 94, cooldown: 0.62 },
+  { id: "knife1", name: "Coltello", desc: "Taglia in fretta: più danno e colpi più veloci.", cost: 60, damage: 26, range: 50, cooldown: 0.32 },
+  { id: "knife2", name: "Coltello a serramanico", desc: "Lama migliore: ancora più danno e velocità.", cost: 140, damage: 36, range: 50, cooldown: 0.24 },
+  { id: "bat", name: "Mazza da baseball", desc: "Più lenta, ma colpisce molto più lontano e più forte.", cost: 260, damage: 50, range: 78, cooldown: 0.55 },
+  { id: "pole", name: "Palo d'acciaio", desc: "Portata e danno massimi. Non fa sconti.", cost: 420, damage: 68, range: 94, cooldown: 0.62 },
 ];
 
 // Ranged weapons are a separate, optional loadout slot (key F) unlocked once
-// you've reached a deep enough zone at least once. Also sequential.
+// the current run has reached a deep enough zone. Also sequential. Each has a
+// capped ammo pool (no unlimited spray) refilled by kills or the zone shop.
 const RANGED_WEAPONS = [
-  { id: "pistol", name: "Pistola", desc: "Colpisce a distanza. Cadenza moderata.", cost: 250, damage: 22, cooldown: 0.6, projectileSpeed: 560, minZone: 3 },
-  { id: "smg", name: "Mitra", desc: "Raffica rapida, danno per colpo minore.", cost: 600, damage: 13, cooldown: 0.14, projectileSpeed: 640, minZone: 5 },
+  { id: "pistol", name: "Pistola", desc: "Colpisce a distanza. Cadenza moderata.", cost: 220, damage: 22, cooldown: 0.6, projectileSpeed: 560, minZone: 3, maxAmmo: 24, costPerAmmo: 6 },
+  { id: "smg", name: "Mitra", desc: "Raffica rapida, danno per colpo minore.", cost: 480, damage: 13, cooldown: 0.14, projectileSpeed: 640, minZone: 5, maxAmmo: 60, costPerAmmo: 4 },
 ];
 
 // Three enemy archetypes with distinct movement/attack behavior, not just
@@ -185,8 +197,6 @@ function pickEnemyType(zone) {
   return candidates[candidates.length - 1];
 }
 
-const SAVE_KEY = "quartiere_ostile_save_v1";
-
 /* =========================================================
    UTILS
 ========================================================= */
@@ -227,29 +237,22 @@ const SoundManager = {
   coin() { this.beep(760, 0.08, "square", 0.04); },
   dash() { this.beep(500, 0.07, "sine", 0.03); },
   shoot() { this.beep(880, 0.05, "square", 0.045); },
+  emptyClick() { this.beep(140, 0.05, "square", 0.03); },
+  heal() { this.beep(520, 0.12, "sine", 0.05); },
+  ammoPickup() { this.beep(660, 0.06, "square", 0.04); },
   wave() { this.beep(220, 0.3, "triangle", 0.06); },
   gameover() { this.beep(80, 0.5, "sawtooth", 0.08); },
 };
 
 /* =========================================================
-   SAVE / LOAD
+   RUN STATE
+   Nothing here survives a death — money, upgrades and weapons only exist
+   for the current playthrough. Dying resets everything to zero.
 ========================================================= */
-function loadSave() {
-  try {
-    const raw = localStorage.getItem(SAVE_KEY);
-    if (!raw) return null;
-    const data = JSON.parse(raw);
-    if (typeof data.money !== "number") return null;
-    return data;
-  } catch (e) {
-    return null;
-  }
-}
-
-function defaultSave() {
+function createRunState() {
   const upgrades = {};
   UPGRADES.forEach(u => { upgrades[u.id] = 0; });
-  return { money: 0, upgrades, bestZone: 1, meleeTier: 0, rangedTier: -1 };
+  return { money: 0, upgrades, meleeTier: 0, rangedTier: -1 };
 }
 
 /* =========================================================
@@ -313,6 +316,59 @@ class Projectile {
 }
 
 /* =========================================================
+   PICKUP (medikit / ammo, dropped by defeated enemies)
+========================================================= */
+class Pickup {
+  constructor(x, y, kind, amount) {
+    this.x = x;
+    this.y = y;
+    this.kind = kind; // "health" | "ammo"
+    this.amount = amount;
+    this.radius = CONFIG.pickup.radius;
+    this.life = CONFIG.pickup.lifespan;
+    this.dead = false;
+  }
+  update(dt) {
+    this.life -= dt;
+    if (this.life <= 0) this.dead = true;
+  }
+  draw(ctx) {
+    const alpha = this.life < 2 ? clamp(this.life / 2, 0.15, 1) : 1;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    if (this.kind === "health") {
+      ctx.fillStyle = "#3ddc71";
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#0c3d1e";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(this.x - 4, this.y); ctx.lineTo(this.x + 4, this.y);
+      ctx.moveTo(this.x, this.y - 4); ctx.lineTo(this.x, this.y + 4);
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = "#ffd24a";
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#5c4108";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.fillStyle = "#5c4108";
+      ctx.font = "bold 10px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("A", this.x, this.y + 0.5);
+    }
+    ctx.restore();
+  }
+}
+
+/* =========================================================
    PLAYER
 ========================================================= */
 class Player {
@@ -335,10 +391,12 @@ class Player {
     this.stats = null; // computed from upgrades
     this.melee = null; // computed from equipped melee weapon
     this.ranged = null; // computed from equipped ranged weapon, or null if unarmed
+    this.ammo = 0; // rounds currently carried for the equipped ranged weapon
+    this._rangedWeaponId = null; // tracks tier changes so ammo only refills on upgrade, not on every stat refresh
   }
 
-  refreshLoadout(save) {
-    const lvl = id => save.upgrades[id] || 0;
+  refreshLoadout(run) {
+    const lvl = id => run.upgrades[id] || 0;
     const cfg = CONFIG.player;
 
     const gymBonus = lvl("gym") * UPGRADES.find(u => u.id === "gym").perLevel;
@@ -361,7 +419,7 @@ class Player {
       doorHealFraction: clamp(doorHeal, 0, 0.9),
     };
 
-    const meleeWeapon = MELEE_WEAPONS[save.meleeTier || 0];
+    const meleeWeapon = MELEE_WEAPONS[run.meleeTier || 0];
     this.melee = {
       name: meleeWeapon.name,
       damage: meleeWeapon.damage + gymBonus,
@@ -370,17 +428,25 @@ class Player {
       activeTime: Math.min(0.18, meleeWeapon.cooldown * 0.4),
     };
 
-    const rangedIdx = save.rangedTier;
+    const rangedIdx = run.rangedTier;
     if (rangedIdx != null && rangedIdx >= 0 && RANGED_WEAPONS[rangedIdx]) {
       const rw = RANGED_WEAPONS[rangedIdx];
+      if (this._rangedWeaponId !== rw.id) {
+        // Newly acquired or upgraded gun: hand it over freshly loaded.
+        this.ammo = rw.maxAmmo;
+        this._rangedWeaponId = rw.id;
+      }
       this.ranged = {
         name: rw.name,
         damage: rw.damage + gymBonus * 0.5,
         cooldown: rw.cooldown,
         projectileSpeed: rw.projectileSpeed,
+        maxAmmo: rw.maxAmmo,
       };
     } else {
       this.ranged = null;
+      this._rangedWeaponId = null;
+      this.ammo = 0;
     }
   }
 
@@ -416,7 +482,9 @@ class Player {
 
   tryRangedAttack(game) {
     if (!this.ranged || this.rangedCooldownTimer > 0) return;
+    if (this.ammo <= 0) { SoundManager.emptyClick(); return; }
     this.rangedCooldownTimer = this.ranged.cooldown;
+    this.ammo--;
     // Facing only has 8 possible directions (derived from WASD combos), so
     // without a mouse to aim with, a bit of soft lock-on onto whatever enemy
     // is roughly ahead makes shooting feel intentional instead of hopeless.
@@ -734,15 +802,14 @@ class Game {
     this.input.onDash = () => { if (this.state === "playing") this.player.tryDash(); };
     this.input.onToggleMenu = () => this.toggleUpgradeMenu();
 
-    this.save = loadSave() || defaultSave();
-    if (this.save.meleeTier == null) this.save.meleeTier = 0;
-    if (this.save.rangedTier == null) this.save.rangedTier = -1;
+    this.run = createRunState();
     this.player = new Player(CONFIG.width / 2, CONFIG.height / 2);
-    this.player.refreshLoadout(this.save);
+    this.player.refreshLoadout(this.run);
     this.player.resetForRun();
 
     this.enemies = [];
     this.projectiles = [];
+    this.pickups = [];
     this.floatingTexts = [];
 
     this.zone = 1;
@@ -776,17 +843,6 @@ class Game {
       SoundManager.muted = !SoundManager.muted;
       document.getElementById("mute-btn").textContent = SoundManager.muted ? "🔇" : "🔊";
     });
-
-    const saveSummary = document.getElementById("save-summary");
-    if (this.save.money > 0 || this.save.bestZone > 1) {
-      saveSummary.classList.remove("hidden");
-      document.getElementById("save-money").textContent = this.save.money;
-      document.getElementById("save-zone").textContent = this.save.bestZone;
-    }
-  }
-
-  persist() {
-    localStorage.setItem(SAVE_KEY, JSON.stringify(this.save));
   }
 
   zoneName(zone) {
@@ -817,7 +873,8 @@ class Game {
   }
 
   startRun() {
-    this.player.refreshLoadout(this.save);
+    this.run = createRunState();
+    this.player.refreshLoadout(this.run);
     this.player.resetForRun();
     this.player.x = CONFIG.width / 2;
     this.player.y = CONFIG.height / 2;
@@ -825,6 +882,7 @@ class Game {
     this.moneyThisRun = 0;
     this.enemies = [];
     this.projectiles = [];
+    this.pickups = [];
     this.floatingTexts = [];
     this.setState("playing");
     this.startZone();
@@ -832,10 +890,6 @@ class Game {
 
   startZone() {
     this.player.healOnNewZone();
-    if (this.zone > this.save.bestZone) {
-      this.save.bestZone = this.zone;
-      this.persist();
-    }
     const count = Math.min(
       CONFIG.waves.baseEnemies + (this.zone - 1) * CONFIG.waves.perZone,
       CONFIG.waves.maxEnemies
@@ -896,27 +950,60 @@ class Game {
       const [minM, maxM] = enemy.stats.moneyRange;
       const reward = randInt(minM, maxM);
       this.moneyThisRun += reward;
-      this.save.money += reward;
+      this.run.money += reward;
       this.floatingTexts.push(new FloatingText(enemy.x, enemy.y - 34, `+${reward}€`, "#4fd07a"));
       this.waveEnemiesDefeated++;
       SoundManager.coin();
-      this.persist();
+      this.rollPickupDrop(enemy);
     } else {
       SoundManager.hitEnemy();
     }
   }
 
+  // At most one pickup per kill: a medikit if the player could use one,
+  // otherwise a shot at ammo if they're carrying a gun.
+  rollPickupDrop(enemy) {
+    const cfg = CONFIG.pickup;
+    if (Math.random() < cfg.medikitChance && this.player.hp < this.player.maxHp * 0.9) {
+      const heal = Math.round(this.player.maxHp * cfg.medikitHealFraction);
+      this.pickups.push(new Pickup(enemy.x, enemy.y, "health", heal));
+      return;
+    }
+    if (this.player.ranged && Math.random() < cfg.ammoChance) {
+      const amount = randInt(cfg.ammoAmountRange[0], cfg.ammoAmountRange[1]);
+      this.pickups.push(new Pickup(enemy.x, enemy.y, "ammo", amount));
+    }
+  }
+
+  collectPickup(pickup) {
+    if (pickup.kind === "health") {
+      const before = this.player.hp;
+      this.player.hp = clamp(this.player.hp + pickup.amount, 0, this.player.maxHp);
+      const healed = Math.round(this.player.hp - before);
+      if (healed > 0) {
+        this.floatingTexts.push(new FloatingText(this.player.x, this.player.y - 26, `+${healed} HP`, "#3ddc71"));
+        SoundManager.heal();
+      }
+    } else if (pickup.kind === "ammo" && this.player.ranged) {
+      const add = Math.min(pickup.amount, this.player.ranged.maxAmmo - this.player.ammo);
+      if (add > 0) {
+        this.player.ammo += add;
+        this.floatingTexts.push(new FloatingText(this.player.x, this.player.y - 26, `+${add} munizioni`, "#ffd24a"));
+        SoundManager.ammoPickup();
+      }
+    }
+  }
+
   onPlayerHit(enemyStats) {
-    if (this.save.money <= 0) return;
+    if (this.run.money <= 0) return;
     const stealFrac = 0.05;
     const reduction = this.player.stats.stealReduction;
-    let stolen = Math.round(this.save.money * stealFrac * (1 - reduction));
-    stolen = Math.min(stolen, this.save.money);
+    let stolen = Math.round(this.run.money * stealFrac * (1 - reduction));
+    stolen = Math.min(stolen, this.run.money);
     if (stolen > 0) {
-      this.save.money -= stolen;
+      this.run.money -= stolen;
       this.moneyThisRun -= Math.min(stolen, Math.max(0, this.moneyThisRun));
       this.floatingTexts.push(new FloatingText(this.player.x, this.player.y - 26, `-${stolen}€ rubati!`, "#d9455f"));
-      this.persist();
     }
   }
 
@@ -944,8 +1031,9 @@ class Game {
       btn.textContent = "Riprendi";
     }
     this.renderUpgradeList();
-    this.renderWeaponList("melee-weapon-list", MELEE_WEAPONS, this.save.meleeTier, (idx) => this.buyMeleeWeapon(idx));
-    this.renderWeaponList("ranged-weapon-list", RANGED_WEAPONS, this.save.rangedTier, (idx) => this.buyRangedWeapon(idx));
+    this.renderWeaponList("melee-weapon-list", MELEE_WEAPONS, this.run.meleeTier, (idx) => this.buyMeleeWeapon(idx));
+    this.renderWeaponList("ranged-weapon-list", RANGED_WEAPONS, this.run.rangedTier, (idx) => this.buyRangedWeapon(idx));
+    this.renderAmmoShop();
     document.getElementById("upgrade-screen").classList.remove("hidden");
   }
 
@@ -967,7 +1055,7 @@ class Game {
     const list = document.getElementById("upgrade-list");
     list.innerHTML = "";
     UPGRADES.forEach(upg => {
-      const level = this.save.upgrades[upg.id] || 0;
+      const level = this.run.upgrades[upg.id] || 0;
       const maxed = level >= upg.maxLevel;
       const cost = maxed ? null : this.costFor(upg, level);
 
@@ -978,18 +1066,17 @@ class Game {
         <p>${upg.desc}</p>
         <div class="row">
           <span class="level">Lv. ${level}/${upg.maxLevel}</span>
-          <button ${maxed || cost > this.save.money ? "disabled" : ""}>
+          <button ${maxed || cost > this.run.money ? "disabled" : ""}>
             ${maxed ? "MAX" : `Acquista — ${cost}€`}
           </button>
         </div>
       `;
       if (!maxed) {
         card.querySelector("button").addEventListener("click", () => {
-          if (this.save.money >= cost) {
-            this.save.money -= cost;
-            this.save.upgrades[upg.id] = level + 1;
-            this.player.refreshLoadout(this.save);
-            this.persist();
+          if (this.run.money >= cost) {
+            this.run.money -= cost;
+            this.run.upgrades[upg.id] = level + 1;
+            this.player.refreshLoadout(this.run);
             this.renderUpgradeList();
             this.updateHUDStatic();
           }
@@ -997,19 +1084,19 @@ class Game {
       }
       list.appendChild(card);
     });
-    document.getElementById("upgrade-money").textContent = `€ ${this.save.money}`;
+    document.getElementById("upgrade-money").textContent = `€ ${this.run.money}`;
   }
 
   // Shared renderer for the sequential melee/ranged weapon tracks: only the
   // next tier is ever purchasable, earlier tiers show as owned, later ones
-  // as locked (optionally gated behind a minimum zone reached).
+  // as locked (optionally gated behind a minimum zone reached this run).
   renderWeaponList(containerId, weapons, currentTier, onBuy) {
     const list = document.getElementById(containerId);
     list.innerHTML = "";
     weapons.forEach((weapon, idx) => {
       const owned = idx <= currentTier;
       const isNext = idx === currentTier + 1;
-      const zoneLocked = weapon.minZone && this.save.bestZone < weapon.minZone;
+      const zoneLocked = weapon.minZone && this.zone < weapon.minZone;
 
       const card = document.createElement("div");
       card.className = "upgrade-card";
@@ -1021,7 +1108,7 @@ class Game {
       } else if (zoneLocked) {
         statusHtml = `<span class="level">Bloccata</span><button disabled>Si sblocca alla zona ${weapon.minZone}</button>`;
       } else {
-        const affordable = weapon.cost <= this.save.money;
+        const affordable = weapon.cost <= this.run.money;
         statusHtml = `<span class="level">&nbsp;</span><button ${affordable ? "" : "disabled"}>Acquista — ${weapon.cost}€</button>`;
       }
 
@@ -1035,24 +1122,70 @@ class Game {
 
   buyMeleeWeapon(idx) {
     const weapon = MELEE_WEAPONS[idx];
-    if (idx !== this.save.meleeTier + 1 || this.save.money < weapon.cost) return;
-    this.save.money -= weapon.cost;
-    this.save.meleeTier = idx;
-    this.player.refreshLoadout(this.save);
-    this.persist();
+    if (idx !== this.run.meleeTier + 1 || this.run.money < weapon.cost) return;
+    this.run.money -= weapon.cost;
+    this.run.meleeTier = idx;
+    this.player.refreshLoadout(this.run);
     this.openUpgradeMenu(this.menuMode);
     this.updateHUDStatic();
   }
 
   buyRangedWeapon(idx) {
     const weapon = RANGED_WEAPONS[idx];
-    if (idx !== this.save.rangedTier + 1 || this.save.money < weapon.cost) return;
-    if (weapon.minZone && this.save.bestZone < weapon.minZone) return;
-    this.save.money -= weapon.cost;
-    this.save.rangedTier = idx;
-    this.player.refreshLoadout(this.save);
-    this.persist();
+    if (idx !== this.run.rangedTier + 1 || this.run.money < weapon.cost) return;
+    if (weapon.minZone && this.zone < weapon.minZone) return;
+    this.run.money -= weapon.cost;
+    this.run.rangedTier = idx;
+    this.player.refreshLoadout(this.run);
     this.openUpgradeMenu(this.menuMode);
+    this.updateHUDStatic();
+  }
+
+  // Ammo is a separate consumable purchase (not a permanent tier): refills
+  // the equipped gun's pool by a fixed chunk, capped at its max capacity.
+  renderAmmoShop() {
+    const section = document.getElementById("ammo-shop-section");
+    const container = document.getElementById("ammo-shop");
+    if (!this.player.ranged) {
+      section.classList.add("hidden");
+      return;
+    }
+    section.classList.remove("hidden");
+    const weapon = RANGED_WEAPONS[this.run.rangedTier];
+    const cap = weapon.maxAmmo;
+    const current = this.player.ammo;
+    const chunk = Math.min(10, cap - current);
+    const cost = Math.ceil(chunk * weapon.costPerAmmo);
+
+    container.innerHTML = "";
+    const card = document.createElement("div");
+    card.className = "upgrade-card";
+    card.innerHTML = `
+      <h3>Munizioni — ${weapon.name}</h3>
+      <p>Scorta attuale: ${current}/${cap}</p>
+      <div class="row">
+        <span class="level">&nbsp;</span>
+        <button ${chunk <= 0 || cost > this.run.money ? "disabled" : ""}>
+          ${chunk <= 0 ? "Scorta piena" : `Rifornisci +${chunk} — ${cost}€`}
+        </button>
+      </div>
+    `;
+    if (chunk > 0) {
+      card.querySelector("button").addEventListener("click", () => this.buyAmmo());
+    }
+    container.appendChild(card);
+  }
+
+  buyAmmo() {
+    if (!this.player.ranged) return;
+    const weapon = RANGED_WEAPONS[this.run.rangedTier];
+    const chunk = Math.min(10, weapon.maxAmmo - this.player.ammo);
+    if (chunk <= 0) return;
+    const cost = Math.ceil(chunk * weapon.costPerAmmo);
+    if (this.run.money < cost) return;
+    this.run.money -= cost;
+    this.player.ammo += chunk;
+    this.renderAmmoShop();
     this.updateHUDStatic();
   }
 
@@ -1070,15 +1203,12 @@ class Game {
   triggerGameOver() {
     this.setState("gameover");
     SoundManager.gameover();
-    if (this.zone > this.save.bestZone) this.save.bestZone = this.zone;
-    this.persist();
     document.getElementById("final-zone").textContent = this.zone;
     document.getElementById("final-money").textContent = Math.max(0, this.moneyThisRun);
-    document.getElementById("final-total-money").textContent = this.save.money;
   }
 
   updateHUDStatic() {
-    document.getElementById("money-label").textContent = `€ ${this.save.money}`;
+    document.getElementById("money-label").textContent = `€ ${this.run.money}`;
   }
 
   updateHUD() {
@@ -1088,7 +1218,7 @@ class Game {
     document.getElementById("zone-label").textContent = `Zona ${this.zone} — ${this.zoneName(this.zone)}`;
     const remaining = this.waveTotalEnemies - this.waveEnemiesDefeated;
     document.getElementById("wave-label").textContent = `Nemici rimasti: ${remaining}`;
-    document.getElementById("money-label").textContent = `€ ${this.save.money}`;
+    document.getElementById("money-label").textContent = `€ ${this.run.money}`;
 
     const dashFrac = 1 - clamp(this.player.dashCooldownTimer / CONFIG.player.dashCooldown, 0, 1);
     let fill = document.querySelector("#dash-indicator .fill");
@@ -1101,7 +1231,7 @@ class Game {
 
     const weaponLabel = document.getElementById("weapon-label");
     weaponLabel.textContent = this.player.ranged
-      ? `${this.player.melee.name} · ${this.player.ranged.name}`
+      ? `${this.player.melee.name} · ${this.player.ranged.name} (${this.player.ammo}/${this.player.ranged.maxAmmo})`
       : this.player.melee.name;
 
     const rangedIndicator = document.getElementById("ranged-indicator");
@@ -1153,6 +1283,16 @@ class Game {
     }
     this.projectiles = this.projectiles.filter(p => !p.dead);
 
+    for (const pickup of this.pickups) {
+      if (pickup.dead) continue;
+      pickup.update(dt);
+      if (!pickup.dead && dist(this.player.x, this.player.y, pickup.x, pickup.y) <= this.player.radius + pickup.radius) {
+        this.collectPickup(pickup);
+        pickup.dead = true;
+      }
+    }
+    this.pickups = this.pickups.filter(p => !p.dead);
+
     for (const ft of this.floatingTexts) ft.update(dt);
     this.floatingTexts = this.floatingTexts.filter(ft => !ft.dead);
 
@@ -1201,6 +1341,7 @@ class Game {
 
   draw() {
     this.drawBackground();
+    for (const pickup of this.pickups) pickup.draw(this.ctx);
     for (const enemy of this.enemies) enemy.draw(this.ctx);
     for (const proj of this.projectiles) proj.draw(this.ctx);
     this.player.draw(this.ctx);
