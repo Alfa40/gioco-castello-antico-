@@ -8,19 +8,22 @@ Sei un ragazzo qualunque che vive in un quartiere difficile. Ogni notte dei crim
 
 Apri `index.html` in un browser (o servilo con un semplice server statico, es. `python3 -m http.server`), poi premi **Entra nel quartiere**.
 
-- **WASD / Frecce** — Movimento (determina anche la direzione dell'attacco/dello sparo)
+- **WASD / Frecce** — Movimento (determina anche la direzione dell'attacco in mischia)
 - **Spazio** — Attacca in mischia (colpisce i nemici a distanza ravvicinata attorno a te)
-- **F** — Spara con l'arma a distanza, se ne possiedi una
+- **F** — Spara manualmente con l'arma a distanza, se ne possiedi una
 - **Shift** — Scatto/schivata (breve invulnerabilità)
 - **U** / **Esc** — Pausa e menu potenziamenti casa
+
+Con un'arma a distanza equipaggiata, il personaggio spara **anche in automatico**, senza bisogno di premere nulla, non appena la mira è puntata su un nemico a portata (come nei giochi mobile). Da tastiera la mira segue semplicemente la direzione in cui ti muovi.
 
 ### Controller (es. DualShock 4 via Bluetooth)
 
 Il gioco usa la Gamepad API del browser: nessuna configurazione richiesta, basta abbinare il controller via Bluetooth nel sistema operativo, aprire la pagina e **premere un tasto sul controller** (i browser espongono il gamepad solo dopo una prima pressione, per motivi di privacy). Lo stato della connessione compare nella schermata iniziale.
 
 - **Levetta sinistra / D-pad** — Movimento
+- **Levetta destra** — Mira, indipendente dal movimento (torna a seguire il movimento quando la lasci al centro)
 - **✕ (Cross)** — Attacca in mischia
-- **R2** — Spara con l'arma a distanza
+- **R2** — Spara manualmente (in aggiunta allo sparo automatico quando la mira è su un nemico)
 - **○ (Circle)** — Scatto/schivata
 - **Options** — Pausa e menu potenziamenti casa
 

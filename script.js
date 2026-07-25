@@ -375,7 +375,8 @@ class Player {
   constructor(x, y) {
     this.x = x;
     this.y = y;
-    this.facing = -Math.PI / 2; // up
+    this.facing = -Math.PI / 2; // up — movement direction, drives melee swing & dash
+    this.aimAngle = this.facing; // where the ranged weapon points; right stick overrides, else follows facing
     this.radius = CONFIG.player.radius;
 
     this.attackCooldownTimer = 0;
@@ -480,15 +481,28 @@ class Player {
     }
   }
 
+  // Manual trigger (F key / R2): fires along the current aim even if nothing
+  // is lined up, snapping onto a nearby enemy within a narrow cone if there is one.
   tryRangedAttack(game) {
     if (!this.ranged || this.rangedCooldownTimer > 0) return;
     if (this.ammo <= 0) { SoundManager.emptyClick(); return; }
+    const angle = game.aimAssist(this.x, this.y, this.aimAngle);
+    this.fireRanged(game, angle);
+  }
+
+  // Hands-free auto-fire, like a mobile shooter: as long as the aim (right
+  // stick, or facing when it's centered) is actually resting on an enemy in
+  // range, the gun keeps firing on its own — no trigger needed.
+  autoFireRanged(game) {
+    if (!this.ranged || this.rangedCooldownTimer > 0 || this.ammo <= 0) return;
+    const angle = game.findAutoFireAngle(this.x, this.y, this.aimAngle);
+    if (angle === null) return;
+    this.fireRanged(game, angle);
+  }
+
+  fireRanged(game, angle) {
     this.rangedCooldownTimer = this.ranged.cooldown;
     this.ammo--;
-    // Facing only has 8 possible directions (derived from WASD combos), so
-    // without a mouse to aim with, a bit of soft lock-on onto whatever enemy
-    // is roughly ahead makes shooting feel intentional instead of hopeless.
-    const angle = game.aimAssist(this.x, this.y, this.facing);
     const muzzle = this.radius + 8;
     game.spawnProjectile(
       this.x + Math.cos(angle) * muzzle,
@@ -538,6 +552,11 @@ class Player {
       mx /= len; my /= len;
       this.facing = Math.atan2(my, mx);
     }
+
+    // Right stick (if tilted) aims independently of movement; otherwise the
+    // aim just follows facing, which keeps keyboard-only play unchanged.
+    const gpAim = input.gpAim;
+    this.aimAngle = gpAim ? Math.atan2(gpAim.y, gpAim.x) : this.facing;
 
     if (this.dashTimer > 0) {
       this.dashTimer -= dt;
@@ -592,6 +611,18 @@ class Player {
     ctx.moveTo(0, 0);
     ctx.lineTo(Math.cos(this.facing) * indicatorLen, Math.sin(this.facing) * indicatorLen);
     ctx.stroke();
+
+    // aim indicator: only meaningful with a ranged weapon, and only worth
+    // drawing separately from facing when it actually points elsewhere
+    if (this.ranged && Math.abs(this.aimAngle - this.facing) > 0.05) {
+      const aimLen = indicatorLen + 14;
+      ctx.strokeStyle = "#ffd24a";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(Math.cos(this.aimAngle) * aimLen, Math.sin(this.aimAngle) * aimLen);
+      ctx.stroke();
+    }
 
     ctx.restore();
   }
@@ -792,6 +823,7 @@ class InputHandler {
 
     this.gamepadConnected = false;
     this.gpMove = { up: false, down: false, left: false, right: false };
+    this.gpAim = null; // { x, y } unit vector from the right stick, or null when centered
     this.gpAttack = false;
     this.gpRanged = false;
     this.gpDash = false;
@@ -834,6 +866,7 @@ class InputHandler {
     }
     if (!gp) {
       this.gpMove = { up: false, down: false, left: false, right: false };
+      this.gpAim = null;
       this.gpAttack = this.gpRanged = this.gpDash = false;
       return;
     }
@@ -848,6 +881,13 @@ class InputHandler {
       up: ly < -GAMEPAD_STICK_DEADZONE || b(GAMEPAD_BUTTONS.dpadUp),
       down: ly > GAMEPAD_STICK_DEADZONE || b(GAMEPAD_BUTTONS.dpadDown),
     };
+
+    // Right stick steers where the player looks/aims, independent of movement.
+    const rx = gp.axes[2] || 0;
+    const ry = gp.axes[3] || 0;
+    const rMag = Math.hypot(rx, ry);
+    this.gpAim = rMag > GAMEPAD_STICK_DEADZONE ? { x: rx / rMag, y: ry / rMag } : null;
+
     this.gpAttack = b(GAMEPAD_BUTTONS.attack);
     this.gpRanged = b(GAMEPAD_BUTTONS.ranged);
     this.gpDash = b(GAMEPAD_BUTTONS.dash);
@@ -991,11 +1031,8 @@ class Game {
     this.projectiles.push(new Projectile(x, y, angle, speed, damage));
   }
 
-  // Snaps the firing angle onto the nearest enemy within a narrow cone ahead
-  // of the player, if there is one; otherwise fires straight along facing.
-  aimAssist(x, y, facing) {
-    const maxAngle = Math.PI / 5;
-    const maxDist = 480;
+  // Nearest living enemy within a cone around `angle`, or null if none.
+  findNearestInCone(x, y, angle, maxAngle, maxDist) {
     let best = null;
     let bestDiff = Infinity;
     for (const enemy of this.enemies) {
@@ -1003,15 +1040,28 @@ class Game {
       const dx = enemy.x - x, dy = enemy.y - y;
       const d = Math.hypot(dx, dy);
       if (d > maxDist) continue;
-      const angle = Math.atan2(dy, dx);
-      let diff = Math.abs(angle - facing);
+      const enemyAngle = Math.atan2(dy, dx);
+      let diff = Math.abs(enemyAngle - angle);
       if (diff > Math.PI) diff = Math.PI * 2 - diff;
       if (diff <= maxAngle && diff < bestDiff) {
         bestDiff = diff;
-        best = angle;
+        best = enemyAngle;
       }
     }
-    return best !== null ? best : facing;
+    return best;
+  }
+
+  // Manual fire: snaps onto a nearby enemy if there is one, otherwise still
+  // fires straight along the aim (a deliberate button press shouldn't be a no-op).
+  aimAssist(x, y, aim) {
+    const found = this.findNearestInCone(x, y, aim, Math.PI / 5, 480);
+    return found !== null ? found : aim;
+  }
+
+  // Auto-fire: only shoots when something is actually sitting in the aim
+  // cone — silence otherwise, so the gun doesn't spray at nothing.
+  findAutoFireAngle(x, y, aim) {
+    return this.findNearestInCone(x, y, aim, Math.PI / 6, 480);
   }
 
   damageEnemy(enemy, amount) {
@@ -1332,6 +1382,9 @@ class Game {
     if (this.input.gpAttack) this.player.tryAttack(this);
     if (this.input.gpRanged) this.player.tryRangedAttack(this);
     if (this.input.gpDash) this.player.tryDash();
+    // Hands-free shooting: fires on its own whenever the aim rests on an
+    // enemy, on top of (not instead of) the manual F/R2 trigger above.
+    this.player.autoFireRanged(this);
 
     if (this.enemiesToSpawn > 0) {
       this.spawnTimer -= dt;
