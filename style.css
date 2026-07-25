@@ -22,10 +22,14 @@ html, body {
 }
 
 #game-container {
-  position: relative;
+  position: fixed;
+  top: 50%;
+  left: 50%;
   width: 960px;
   height: 600px;
-  margin: 24px auto;
+  transform-origin: center center;
+  /* actual transform (scale + optional 90deg rotation on phones held upright)
+     is computed and applied in script.js so it always fits the viewport */
   border: 1px solid var(--panel-border);
   border-radius: 10px;
   overflow: hidden;

@@ -2069,6 +2069,27 @@ class Game {
   }
 }
 
+// The game is built around a fixed 960x600 landscape canvas, but on a phone
+// held upright the viewport is taller than it is wide. Rather than forcing
+// the player to physically rotate the device, we rotate the whole container
+// 90deg via CSS and scale it to fill the portrait viewport — the canvas
+// itself still renders at 960x600 internally, so no game logic changes.
+function fitGameContainer() {
+  const container = document.getElementById("game-container");
+  if (!container) return;
+  const GAME_W = CONFIG.width, GAME_H = CONFIG.height;
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const portrait = vh > vw;
+  const scale = portrait
+    ? Math.min(vw / GAME_H, vh / GAME_W)
+    : Math.min(vw / GAME_W, vh / GAME_H);
+  const rotate = portrait ? 90 : 0;
+  container.style.transform = `translate(-50%, -50%) rotate(${rotate}deg) scale(${scale})`;
+}
+window.addEventListener("resize", fitGameContainer);
+window.addEventListener("orientationchange", fitGameContainer);
+fitGameContainer();
+
 window.addEventListener("load", () => {
   new Game();
 });
