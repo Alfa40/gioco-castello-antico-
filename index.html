@@ -35,6 +35,8 @@
         Ogni notte i criminali di strada provano ad assaltarti per portarti via tutto.
         Difenditi, mettili K.O. e usa i soldi guadagnati per rinforzare casa tua e comprare
         armi migliori. Più ti addentri nel quartiere, più diventano numerosi, veloci e aggressivi.
+        Ogni partita riparte da zero: se vieni sopraffatto perdi tutti i potenziamenti e le armi,
+        e la prossima volta si ricomincia da capo.
       </p>
       <div class="controls">
         <div><b>WASD / Frecce</b> — Movimento</div>
@@ -48,9 +50,10 @@
         <div class="legend-item"><span class="legend-dot" style="background:#e0703d"></span><b>Nervoso</b> — veloce, attacca in fretta</div>
         <div class="legend-item"><span class="legend-dot" style="background:#9b59d0"></span><b>Imprevedibile</b> — movimenti erratici, non sempre ti insegue</div>
       </div>
-      <div id="save-summary" class="save-summary hidden">
-        Salvataggio trovato: <span id="save-money"></span>€, zona migliore <span id="save-zone"></span>
-      </div>
+      <p class="desc small">
+        I nemici sconfitti lasciano a volte un medikit (cura) o, se hai un'arma a distanza,
+        delle munizioni. Le munizioni si possono anche comprare a fine zona.
+      </p>
       <button id="start-btn" class="btn-primary">Entra nel quartiere</button>
     </div>
   </div>
@@ -69,6 +72,11 @@
       <h3 class="section-title">Armi a distanza</h3>
       <div id="ranged-weapon-list" class="upgrade-list weapon-list"></div>
 
+      <div id="ammo-shop-section" class="hidden">
+        <h3 class="section-title">Munizioni</h3>
+        <div id="ammo-shop" class="upgrade-list weapon-list"></div>
+      </div>
+
       <div class="upgrade-footer">
         <div id="upgrade-money" class="money-label">€ 0</div>
         <button id="upgrade-continue-btn" class="btn-primary">Continua</button>
@@ -79,11 +87,10 @@
   <div id="gameover-screen" class="overlay hidden">
     <div class="panel">
       <h1 class="gameover-title">Sopraffatto</h1>
-      <p class="desc">Ti hanno steso prima che tornassi a casa. Ma quello che hai guadagnato resta tuo.</p>
+      <p class="desc">Ti hanno steso prima che tornassi a casa. Perdi tutto: potenziamenti, armi e soldi. La prossima partita si riparte da zero.</p>
       <div class="stats">
         <div>Zona raggiunta: <span id="final-zone"></span></div>
         <div>Soldi guadagnati in questa run: <span id="final-money"></span> €</div>
-        <div>Totale risparmi: <span id="final-total-money"></span> €</div>
       </div>
       <button id="restart-btn" class="btn-primary">Riprova</button>
     </div>
