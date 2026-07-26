@@ -346,6 +346,18 @@ h2 { margin: 0 0 4px; color: var(--accent); }
 }
 html.touch-device #touch-controls { display: block; }
 
+/* Phone/tablet held upright (see setupResponsiveScaling): the game field
+   must stay clean, so controls move to a dedicated strip BELOW the canvas
+   instead of overlaying it — #game-container is grown taller by
+   CONTROL_STRIP_HEIGHT (260px) to make room, and this repositions
+   #touch-controls to occupy just that extra space. */
+html.touch-device.portrait-controls #touch-controls {
+  top: 600px;
+  height: 260px;
+  background: rgba(255, 255, 255, 0.03);
+  border-top: 1px solid var(--panel-border);
+}
+
 .joystick-base {
   position: absolute;
   left: 36px;

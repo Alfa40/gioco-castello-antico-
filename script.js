@@ -117,6 +117,30 @@ const Sprites = {
 };
 Sprites.load();
 
+// Most weapon-hand icons are authored pointing straight "up" (the convention
+// Player.draw() rotates around), but a few of the supplied reference images
+// were drawn at an angle instead — this corrects just those so every weapon
+// still visually points in the aim/facing direction. Value = how far
+// clockwise (radians) the art's own barrel/blade points away from "up".
+const WEAPON_SPRITE_ANGLE_CORRECTION = {
+  smg: 32.5 * Math.PI / 180,
+  sniper: 65.5 * Math.PI / 180,
+  shotgun: 43.7 * Math.PI / 180,
+  rocket: 75.5 * Math.PI / 180,
+};
+
+// Draws `img` centered at the current origin, scaled so its longer side
+// equals targetMax while preserving its own aspect ratio — the top-down
+// sprites have very different width/height ratios (a knife icon vs a car),
+// unlike the old front-view sprites which were all authored square.
+function drawSpriteFit(ctx, img, targetMax, yOffset = 0) {
+  const scale = targetMax / Math.max(img.width, img.height);
+  const w = img.width * scale;
+  const h = img.height * scale;
+  ctx.drawImage(img, -w / 2, -h / 2 + yOffset, w, h);
+  return { w, h };
+}
+
 const UPGRADES = [
   {
     id: "gym",
@@ -985,19 +1009,20 @@ class Player {
       ctx.restore();
     }
 
-    // body: top-down sprite (rotated to facing, with a small walk bob) once
-    // loaded, falling back to the original vector circle until then
+    // body: bird's-eye top-down head sprite (rotated to facing, with a small
+    // walk bob) once loaded, falling back to the original vector circle
+    // until then
     const sprite = Sprites.get("player");
     if (sprite) {
       const bob = this.isMoving ? Math.sin(this.walkPhase) * 3 : 0;
-      const size = this.radius * 3.6;
+      const size = this.radius * 2.3;
       ctx.save();
       ctx.rotate(this.facing + Math.PI / 2); // sprite art faces "up" by default
-      ctx.drawImage(sprite, -size / 2, -size / 2 + bob, size, size);
+      const { w, h } = drawSpriteFit(ctx, sprite, size, bob);
       if (this.hitFlash > 0) {
         ctx.globalCompositeOperation = "source-atop";
         ctx.fillStyle = `rgba(255, 90, 90, ${Math.min(0.6, this.hitFlash * 2)})`;
-        ctx.fillRect(-size / 2, -size / 2 + bob, size, size);
+        ctx.fillRect(-w / 2, -h / 2 + bob, w, h);
         ctx.globalCompositeOperation = "source-over";
       }
       ctx.restore();
@@ -1011,18 +1036,21 @@ class Player {
       ctx.stroke();
     }
 
-    // Weapon overlay: hands+weapon floating at chest height, drawn on top of
-    // the body. Shows the ranged weapon (rotated to aim, independent of body
+    // Weapon overlay: a single hand+weapon icon (authored pointing "up",
+    // hand at the bottom), offset forward of the head so it reads as an arm
+    // reaching out in the aim/facing direction rather than sitting under the
+    // head. Shows the ranged weapon (rotated to aim, independent of body
     // facing) when one is equipped, otherwise the current melee weapon
     // (rotated with facing, like the body).
     const weaponId = this.ranged ? this._rangedWeaponId : (this.melee && this.melee.id);
     const weaponSprite = weaponId && Sprites.get(weaponId);
     if (weaponSprite) {
       const weaponAngle = this.ranged ? this.aimAngle : this.facing;
-      const size = this.radius * 3.6;
+      const size = this.radius * 2.6;
       ctx.save();
-      ctx.rotate(weaponAngle + Math.PI / 2);
-      ctx.drawImage(weaponSprite, -size / 2, -size / 2, size, size);
+      ctx.rotate(weaponAngle + Math.PI / 2 - (WEAPON_SPRITE_ANGLE_CORRECTION[weaponId] || 0));
+      ctx.translate(0, -this.radius * 0.45);
+      drawSpriteFit(ctx, weaponSprite, size);
       ctx.restore();
     }
 
@@ -1267,18 +1295,21 @@ class Enemy {
     ctx.translate(this.x, this.y);
 
     // Top-down sprite per enemy type (rotated to facing) once loaded,
-    // falling back to the original vector shapes until then.
+    // falling back to the original vector shapes until then. Each enemy's
+    // sprite already bakes in its head, arms and held item as one image
+    // (enemies don't swap weapons like the player), so unlike Player.draw()
+    // there's no separate weapon overlay here.
     const sprite = Sprites.get(this.type.id);
     if (sprite) {
       const bob = this.isMoving ? Math.sin(this.walkPhase) * 2 : 0;
       const size = this.radius * 3.6;
       ctx.save();
       ctx.rotate(this.facing + Math.PI / 2); // sprite art faces "up" by default
-      ctx.drawImage(sprite, -size / 2, -size / 2 + bob, size, size);
+      const { w, h } = drawSpriteFit(ctx, sprite, size, bob);
       if (this.hitFlash > 0) {
         ctx.globalCompositeOperation = "source-atop";
         ctx.fillStyle = "rgba(255, 255, 255, 0.75)";
-        ctx.fillRect(-size / 2, -size / 2 + bob, size, size);
+        ctx.fillRect(-w / 2, -h / 2 + bob, w, h);
         ctx.globalCompositeOperation = "source-over";
       }
       ctx.restore();
@@ -1608,22 +1639,36 @@ class Game {
   // Scales the fixed 960x600 game box to fit the viewport, keeping aspect
   // ratio, via a CSS transform — the canvas keeps its native resolution and
   // every pixel-based HUD/panel style stays correct at any screen size.
-  // Scales the fixed 960x600 game box to fit any viewport. On a phone held
-  // upright (viewport taller than wide) the whole box is also rotated 90deg
-  // via CSS instead of asking the player to physically rotate the device —
-  // the canvas keeps rendering at its native 960x600 landscape resolution,
-  // only the on-screen presentation changes. bindJoystick() reads
-  // this.portraitRotated to translate real screen drags back into the
-  // game's own up/down/left/right axes.
+  //
+  // On a phone/tablet held upright, the canvas is NOT rotated: the game
+  // field must stay clean with all controls outside of it (see #touch-controls
+  // CSS), so instead the container grows downward by CONTROL_STRIP_HEIGHT to
+  // make room for a control strip below the field, and that taller box is
+  // what gets scaled to fit the viewport — the buttons never sit on top of
+  // the canvas. A narrow desktop *browser window* (no touch) keeps the old
+  // 90deg-rotate trick instead, since there's no touch strip to place there.
   setupResponsiveScaling() {
     const container = document.getElementById("game-container");
+    const CONTROL_STRIP_HEIGHT = 260;
     const fit = () => {
+      const isTouch = document.documentElement.classList.contains("touch-device");
       const portrait = window.innerHeight > window.innerWidth;
-      this.portraitRotated = portrait;
-      const scale = portrait
-        ? Math.min(window.innerWidth / CONFIG.height, window.innerHeight / CONFIG.width)
-        : Math.min(window.innerWidth / CONFIG.width, window.innerHeight / CONFIG.height);
-      container.style.transform = `rotate(${portrait ? 90 : 0}deg) scale(${scale})`;
+      const usesStrip = isTouch && portrait;
+      document.documentElement.classList.toggle("portrait-controls", usesStrip);
+      if (usesStrip) {
+        this.portraitRotated = false;
+        const logicalHeight = CONFIG.height + CONTROL_STRIP_HEIGHT;
+        container.style.height = `${logicalHeight}px`;
+        const scale = Math.min(window.innerWidth / CONFIG.width, window.innerHeight / logicalHeight);
+        container.style.transform = `scale(${scale})`;
+      } else {
+        this.portraitRotated = portrait; // desktop-window-narrow fallback only (no touch strip involved)
+        container.style.height = `${CONFIG.height}px`;
+        const scale = portrait
+          ? Math.min(window.innerWidth / CONFIG.height, window.innerHeight / CONFIG.width)
+          : Math.min(window.innerWidth / CONFIG.width, window.innerHeight / CONFIG.height);
+        container.style.transform = `rotate(${portrait ? 90 : 0}deg) scale(${scale})`;
+      }
     };
     window.addEventListener("resize", fit);
     window.addEventListener("orientationchange", fit);
