@@ -1,4 +1,4 @@
-# Quartiere Ostile
+# Crazy Town
 
 Un piccolo beat 'em up top-down giocabile nel browser, in HTML/CSS/JavaScript puro (nessuna build, nessuna dipendenza).
 
@@ -12,7 +12,7 @@ Apri `index.html` in un browser (o servilo con un semplice server statico, es. `
 - **Spazio** — Attacca in mischia (colpisce i nemici a distanza ravvicinata attorno a te)
 - **F** — Spara manualmente con l'arma a distanza, se ne possiedi una
 - **Shift** — Scatto/schivata (breve invulnerabilità)
-- **1-5** — Seleziona l'esplosivo da lanciare
+- **1-7** — Seleziona l'esplosivo da lanciare
 - **G** — Lancia l'esplosivo selezionato
 - **U** / **Esc** — Pausa e menu potenziamenti casa
 
@@ -53,9 +53,9 @@ Anche su telefono, con un'arma a distanza equipaggiata si spara comunque in auto
 - Se un nemico ti colpisce, oltre al danno rischia di rubarti una parte dei soldi guadagnati.
 - Al termine di ogni zona apri il menu **Potenzia casa** e spendi i soldi guadagnati in:
   - **Potenziamenti casa**: danno, velocità, difesa, vita massima, protezione dai furti, recupero HP tra una zona e l'altra.
-  - **Armi da mischia**: una progressione sequenziale (Pugni → Coltello → Coltello a serramanico → Mazza da baseball → Palo d'acciaio). I coltelli colpiscono più forte e più in fretta, mazza e palo colpiscono più lontano ma più lentamente. Ogni tier (tranne i pugni) ha 1-2 **potenziamenti specifici** (impugnatura, lama, chiodi, rinforzi) che vanno comprati tutti prima di poter passare all'arma successiva — restano comunque sempre più deboli dell'arma seguente presa di base.
-  - **Armi a distanza**: uno slot separato e opzionale (tasto F), sbloccato solo dopo aver raggiunto una certa zona in questa run (Pistola dalla zona 3, Mitra dalla zona 5). Anche queste hanno potenziamenti dedicati (mirino, calcio, canna, caricatore) da completare prima di passare all'arma successiva. Hanno un caricatore limitato: le munizioni si esauriscono sparando e vanno rifornite uccidendo nemici (drop casuale) o comprandole nel negozio di fine zona.
-  - **Esplosivi**: granate, molotov, bombe adesive e granate fumogene/stordenti, acquistabili a pile (fino a un massimo a testa). Si lanciano nella direzione della mira (tasto **G** / **R1**), con selezione tramite tasti **1-5** o **L1**. Granata e bomba adesiva fanno danno pesante in un'area (la adesiva si attacca al primo nemico colpito), la molotov lascia una pozza di fuoco che continua a bruciare, fumogena e stordente bloccano i nemici vicini per qualche secondo — utili per divincolarsi da un'orda che ti ha circondato.
+  - **Armi da mischia**: una progressione sequenziale (Pugni → Coltello → Coltello a serramanico → Mazza da baseball → Palo d'acciaio → Martello). I coltelli colpiscono più forte e più in fretta, mazza/palo/martello colpiscono più lontano e più forte ma più lentamente. Ogni tier (tranne i pugni) ha 1-2 **potenziamenti specifici** (impugnatura, lama, chiodi, rinforzi) che vanno comprati tutti prima di poter passare all'arma successiva — restano comunque sempre più deboli dell'arma seguente presa di base.
+  - **Armi a distanza**: uno slot separato e opzionale (tasto F), sbloccato solo dopo aver raggiunto una certa zona in questa run (Pistola dalla zona 3, Mitra dalla zona 5, Cecchino dalla zona 7, Shotgun dalla zona 9, Lanciarazzi dalla zona 11). Anche queste hanno potenziamenti dedicati (mirino, calcio, canna, caricatore) da completare prima di passare all'arma successiva. Lo shotgun spara più pallini in un cono stretto, il lanciarazzi fa danno ad area su tutti i nemici colpiti dall'esplosione. Hanno un caricatore limitato: le munizioni si esauriscono sparando e vanno rifornite uccidendo nemici (drop casuale) o comprandole nel negozio di fine zona.
+  - **Esplosivi**: granate, molotov, bombe adesive, granate fumogene/stordenti, coltelli da lancio e shuriken, acquistabili a pile (fino a un massimo a testa). Si lanciano nella direzione della mira (tasto **G** / **R1**), con selezione tramite tasti **1-7** o **L1**. Granata e bomba adesiva fanno danno pesante in un'area (la adesiva si attacca al primo nemico colpito), la molotov lascia una pozza di fuoco che continua a bruciare, fumogena e stordente bloccano i nemici vicini per qualche secondo, coltelli da lancio e shuriken colpiscono quasi all'istante con danno minore — utili per divincolarsi da un'orda che ti ha circondato o finire in fretta un nemico isolato.
 - I nemici sconfitti lasciano a volte un **medikit** (cura una parte della vita massima) o, se hai un'arma a distanza, delle **munizioni**: bastano un attimo di calpestio per raccoglierli.
 - Completata una zona, ti addentri ancora di più nel quartiere: i nemici della zona successiva sono più numerosi, e cambia anche il loro mix di comportamento:
   - **Balordo** — lento e prevedibile, ti insegue in modo diretto.
@@ -63,8 +63,10 @@ Anche su telefono, con un'arma a distanza equipaggiata si spara comunque in auto
   - **Imprevedibile** (dalla zona 3) — movimenti a scatti, non ti insegue sempre: a volte carica, a volte scarta di lato, a volte si allontana.
   - **Bruto** (dalla zona 4) — lentissimo, ma incassare un suo colpo fa malissimo.
   - **Tiratore** (dalla zona 5) — mantiene le distanze e spara proiettili invece di attaccare in mischia; fragile se riesci ad avvicinarti.
+  - **Quelli del drive by** (dalla zona 6) — sfrecciano dentro e fuori dal campo in linea retta sparando contro il player; non attaccano in mischia e non ti inseguono. Se riesci ad abbatterli prima che escano dal campo pagano molto di più del normale.
 - Oltre alla zona, anche il tuo "livello" (quanti potenziamenti/armi hai comprato in questa run) fa lentamente crescere vita e danno dei nemici: comprare tutto non rende la run banale.
-- **Ogni run riparte da zero.** Non c'è alcun progresso permanente tra una partita e l'altra: soldi, potenziamenti, armi, munizioni ed esplosivi esistono solo per la partita in corso. Se vieni sopraffatto, la prossima partita ricomincia da zona 1 con 0 soldi, i pugni nudi e nessun potenziamento — l'unico modo per "fare progressi" è arrivare più in profondità nella stessa run.
+- **Ogni run riparte da zero se vieni sopraffatto.** Non c'è alcun progresso permanente tra una partita e l'altra: se muori, la prossima partita ricomincia da zona 1 con 0 soldi, i pugni nudi e nessun potenziamento — l'unico modo per "fare progressi" è arrivare più in profondità nella stessa run.
+- **La partita in corso però si salva da sola.** Ogni volta che apri il menu potenziamenti (pausa o fine zona) lo stato viene salvato nel browser: puoi chiudere la pagina e riprendere più tardi dalla schermata iniziale con **Continua partita**, senza perdere soldi, potenziamenti e armi. Solo la sconfitta cancella il salvataggio.
 
 ## Struttura del progetto
 

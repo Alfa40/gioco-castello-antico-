@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-<title>Quartiere Ostile</title>
+<title>Crazy Town</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -45,8 +45,8 @@
 
   <div id="start-screen" class="overlay">
     <div class="panel">
-      <img class="hero-portrait" src="generated-images/player.jpg" alt="">
-      <h1>Quartiere Ostile</h1>
+      <img class="hero-portrait" src="generated-images/pixel/player.jpg" alt="">
+      <h1>Crazy Town</h1>
       <p class="tagline">Sei un ragazzo qualunque. Il quartiere no.</p>
       <p class="desc">
         Ogni notte i criminali di strada provano ad assaltarti per portarti via tutto.
@@ -66,7 +66,7 @@
         <div><b>Levetta dx</b> — Mira indipendente dal movimento</div>
         <div><b>Shift</b> — Scatto (schivata)</div>
         <div><b>○ (Circle)</b> — Scatto (schivata)</div>
-        <div><b>1-5</b> — Seleziona esplosivo</div>
+        <div><b>1-7</b> — Seleziona esplosivo</div>
         <div><b>L1</b> — Seleziona esplosivo</div>
         <div><b>G</b> — Lancia l'esplosivo selezionato</div>
         <div><b>R1</b> — Lancia l'esplosivo selezionato</div>
@@ -80,11 +80,12 @@
       </p>
       <div id="gamepad-status" class="gamepad-status">🎮 Nessun controller — premi un tasto sul controller per attivarlo</div>
       <div class="enemy-legend">
-        <div class="legend-item"><img class="legend-portrait" src="generated-images/enemy_balordo.jpg" alt=""><span class="legend-dot" style="background:#8a7355"></span><b>Balordo</b> — lento e prevedibile</div>
-        <div class="legend-item"><img class="legend-portrait" src="generated-images/enemy_nervoso.jpg" alt=""><span class="legend-dot" style="background:#e0703d"></span><b>Nervoso</b> — veloce, attacca in fretta</div>
-        <div class="legend-item"><img class="legend-portrait" src="generated-images/enemy_imprevedibile.jpg" alt=""><span class="legend-dot" style="background:#9b59d0"></span><b>Imprevedibile</b> — movimenti erratici, non sempre ti insegue</div>
-        <div class="legend-item"><img class="legend-portrait" src="generated-images/enemy_bruto.jpg" alt=""><span class="legend-dot" style="background:#5c2626"></span><b>Bruto</b> — lentissimo, ma colpisce durissimo</div>
-        <div class="legend-item"><img class="legend-portrait" src="generated-images/enemy_tiratore.jpg" alt=""><span class="legend-dot" style="background:#4a6b7a"></span><b>Tiratore</b> — spara a distanza, evita la mischia</div>
+        <div class="legend-item"><img class="legend-portrait" src="generated-images/pixel/enemy_balordo.jpg" alt=""><span class="legend-dot" style="background:#8a7355"></span><b>Balordo</b> — lento e prevedibile</div>
+        <div class="legend-item"><img class="legend-portrait" src="generated-images/pixel/enemy_nervoso.jpg" alt=""><span class="legend-dot" style="background:#e0703d"></span><b>Nervoso</b> — veloce, attacca in fretta</div>
+        <div class="legend-item"><img class="legend-portrait" src="generated-images/pixel/enemy_imprevedibile.jpg" alt=""><span class="legend-dot" style="background:#9b59d0"></span><b>Imprevedibile</b> — movimenti erratici, non sempre ti insegue</div>
+        <div class="legend-item"><img class="legend-portrait" src="generated-images/pixel/enemy_bruto.jpg" alt=""><span class="legend-dot" style="background:#5c2626"></span><b>Bruto</b> — lentissimo, ma colpisce durissimo</div>
+        <div class="legend-item"><img class="legend-portrait" src="generated-images/pixel/enemy_tiratore.jpg" alt=""><span class="legend-dot" style="background:#4a6b7a"></span><b>Tiratore</b> — spara a distanza, evita la mischia</div>
+        <div class="legend-item"><img class="legend-portrait" src="generated-images/pixel/enemy_driveby.jpg" alt=""><span class="legend-dot" style="background:#3a3f4a"></span><b>Quelli del drive by</b> — sfrecciano dentro e fuori dal campo sparando</div>
       </div>
       <p class="desc small">
         I nemici sconfitti lasciano a volte un medikit (cura) o, se hai un'arma a distanza,
@@ -94,6 +95,8 @@
         Con molti soldi puoi comprare granate, molotov, bombe adesive e granate fumogene/stordenti:
         utili per fare danni pesanti o per sfuggire a un'orda che ti ha circondato.
       </p>
+      <div id="save-summary" class="save-summary hidden"></div>
+      <button id="continue-btn" class="btn-primary hidden">Continua partita</button>
       <button id="start-btn" class="btn-primary">Entra nel quartiere</button>
     </div>
   </div>
@@ -107,7 +110,6 @@
       <div id="upgrade-list" class="upgrade-list"></div>
 
       <h3 class="section-title">Armi da mischia</h3>
-      <img class="weapon-reference" src="generated-images/weapons_melee.jpg" alt="Riferimento armi da mischia">
       <div id="melee-weapon-list" class="upgrade-list weapon-list"></div>
 
       <div id="melee-weapon-upgrades-section" class="hidden">
@@ -116,7 +118,6 @@
       </div>
 
       <h3 class="section-title">Armi a distanza</h3>
-      <img class="weapon-reference" src="generated-images/weapons_ranged.jpg" alt="Riferimento armi a distanza">
       <div id="ranged-weapon-list" class="upgrade-list weapon-list"></div>
 
       <div id="ranged-weapon-upgrades-section" class="hidden">
@@ -151,7 +152,7 @@
     </div>
   </div>
 
-  <div id="pause-hint" class="pause-hint hidden">U: Potenzia casa · Spazio: Attacca · F: Spara · Shift: Scatto · 1-5: Scegli esplosivo · G: Lancia</div>
+  <div id="pause-hint" class="pause-hint hidden">U: Potenzia casa · Spazio: Attacca · F: Spara · Shift: Scatto · 1-7: Scegli esplosivo · G: Lancia</div>
 </div>
 </div>
 
