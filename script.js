@@ -72,31 +72,34 @@ const CONFIG = {
   ],
 };
 
-// Top-down pixel-art sprites (generated on a solid black background) are
-// chroma-keyed to transparency once, on load, and cached as a processed
-// canvas so draw() doesn't touch pixel data every frame. All sprites share
-// the same "facing up" default orientation as the vector fallback shapes
-// they replace, so the existing rotate-by-facing draw code works unchanged.
+// Top-down pixel-art sprites, pre-baked as PNGs with real alpha transparency
+// (the black backgrounds from generation were chroma-keyed out offline, not
+// at runtime) so they just draw() directly — no canvas pixel processing here.
+// That matters because reading pixel data back out of a canvas that drew a
+// file:// image throws a SecurityError ("tainted canvas"), which is exactly
+// how most players open this game: unzip and double-click index.html. All
+// sprites share the same "facing up" default orientation as the vector
+// fallback shapes they replace, so the rotate-by-facing draw code is unchanged.
 const SPRITE_SOURCES = {
-  player: "generated-images/pixel/player_body.jpg", // body/head only — the equipped weapon is a separate overlay, see WEAPON keys below
-  balordo: "generated-images/pixel/enemy_balordo.jpg",
-  nervoso: "generated-images/pixel/enemy_nervoso.jpg",
-  imprevedibile: "generated-images/pixel/enemy_imprevedibile.jpg",
-  bruto: "generated-images/pixel/enemy_bruto.jpg",
-  tiratore: "generated-images/pixel/enemy_tiratore.jpg",
-  driveby: "generated-images/pixel/enemy_driveby.jpg",
+  player: "generated-images/pixel/player_body.png", // body/head only — the equipped weapon is a separate overlay, see WEAPON keys below
+  balordo: "generated-images/pixel/enemy_balordo.png",
+  nervoso: "generated-images/pixel/enemy_nervoso.png",
+  imprevedibile: "generated-images/pixel/enemy_imprevedibile.png",
+  bruto: "generated-images/pixel/enemy_bruto.png",
+  tiratore: "generated-images/pixel/enemy_tiratore.png",
+  driveby: "generated-images/pixel/enemy_driveby.png",
   // Hands+weapon overlays, floating at chest height in front of the body sprite above — keyed by weapon id (see MELEE_WEAPONS / RANGED_WEAPONS)
-  fists: "generated-images/pixel/weapon_fists.jpg",
-  knife1: "generated-images/pixel/weapon_knife1.jpg",
-  knife2: "generated-images/pixel/weapon_knife2.jpg",
-  bat: "generated-images/pixel/weapon_bat.jpg",
-  pole: "generated-images/pixel/weapon_pole.jpg",
-  hammer: "generated-images/pixel/weapon_hammer.jpg",
-  pistol: "generated-images/pixel/weapon_pistol.jpg",
-  smg: "generated-images/pixel/weapon_smg.jpg",
-  sniper: "generated-images/pixel/weapon_sniper.jpg",
-  shotgun: "generated-images/pixel/weapon_shotgun.jpg",
-  rocket: "generated-images/pixel/weapon_rocket.jpg",
+  fists: "generated-images/pixel/weapon_fists.png",
+  knife1: "generated-images/pixel/weapon_knife1.png",
+  knife2: "generated-images/pixel/weapon_knife2.png",
+  bat: "generated-images/pixel/weapon_bat.png",
+  pole: "generated-images/pixel/weapon_pole.png",
+  hammer: "generated-images/pixel/weapon_hammer.png",
+  pistol: "generated-images/pixel/weapon_pistol.png",
+  smg: "generated-images/pixel/weapon_smg.png",
+  sniper: "generated-images/pixel/weapon_sniper.png",
+  shotgun: "generated-images/pixel/weapon_shotgun.png",
+  rocket: "generated-images/pixel/weapon_rocket.png",
 };
 
 const Sprites = {
@@ -104,7 +107,7 @@ const Sprites = {
   load() {
     for (const [key, src] of Object.entries(SPRITE_SOURCES)) {
       const img = new Image();
-      img.onload = () => { this.ready[key] = chromaKeyToCanvas(img); };
+      img.onload = () => { this.ready[key] = img; };
       img.src = src;
     }
   },
@@ -112,24 +115,6 @@ const Sprites = {
     return this.ready[key] || null;
   },
 };
-
-function chromaKeyToCanvas(img) {
-  const c = document.createElement("canvas");
-  c.width = img.naturalWidth;
-  c.height = img.naturalHeight;
-  const cx = c.getContext("2d");
-  cx.drawImage(img, 0, 0);
-  const imgData = cx.getImageData(0, 0, c.width, c.height);
-  const d = imgData.data;
-  const threshold = 40; // near-black background from the generation prompt
-  for (let i = 0; i < d.length; i += 4) {
-    if (d[i] < threshold && d[i + 1] < threshold && d[i + 2] < threshold) {
-      d[i + 3] = 0;
-    }
-  }
-  cx.putImageData(imgData, 0, 0);
-  return c;
-}
 Sprites.load();
 
 const UPGRADES = [
