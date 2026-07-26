@@ -72,17 +72,31 @@ const CONFIG = {
   ],
 };
 
-// Top-down game sprites (generated separately from the front-facing shop
-// portraits) are rendered on a solid black background — chroma-key it away
-// to transparency once, on load, and cache the processed canvas so draw()
-// doesn't touch pixel data every frame.
+// Top-down pixel-art sprites (generated on a solid black background) are
+// chroma-keyed to transparency once, on load, and cached as a processed
+// canvas so draw() doesn't touch pixel data every frame. All sprites share
+// the same "facing up" default orientation as the vector fallback shapes
+// they replace, so the existing rotate-by-facing draw code works unchanged.
 const SPRITE_SOURCES = {
-  player: "generated-images/topdown/player.jpg",
-  balordo: "generated-images/topdown/enemy_balordo.jpg",
-  nervoso: "generated-images/topdown/enemy_nervoso.jpg",
-  imprevedibile: "generated-images/topdown/enemy_imprevedibile.jpg",
-  bruto: "generated-images/topdown/enemy_bruto.jpg",
-  tiratore: "generated-images/topdown/enemy_tiratore.jpg",
+  player: "generated-images/pixel/player_body.jpg", // body/head only — the equipped weapon is a separate overlay, see WEAPON keys below
+  balordo: "generated-images/pixel/enemy_balordo.jpg",
+  nervoso: "generated-images/pixel/enemy_nervoso.jpg",
+  imprevedibile: "generated-images/pixel/enemy_imprevedibile.jpg",
+  bruto: "generated-images/pixel/enemy_bruto.jpg",
+  tiratore: "generated-images/pixel/enemy_tiratore.jpg",
+  driveby: "generated-images/pixel/enemy_driveby.jpg",
+  // Hands+weapon overlays, floating at chest height in front of the body sprite above — keyed by weapon id (see MELEE_WEAPONS / RANGED_WEAPONS)
+  fists: "generated-images/pixel/weapon_fists.jpg",
+  knife1: "generated-images/pixel/weapon_knife1.jpg",
+  knife2: "generated-images/pixel/weapon_knife2.jpg",
+  bat: "generated-images/pixel/weapon_bat.jpg",
+  pole: "generated-images/pixel/weapon_pole.jpg",
+  hammer: "generated-images/pixel/weapon_hammer.jpg",
+  pistol: "generated-images/pixel/weapon_pistol.jpg",
+  smg: "generated-images/pixel/weapon_smg.jpg",
+  sniper: "generated-images/pixel/weapon_sniper.jpg",
+  shotgun: "generated-images/pixel/weapon_shotgun.jpg",
+  rocket: "generated-images/pixel/weapon_rocket.jpg",
 };
 
 const Sprites = {
@@ -213,10 +227,17 @@ const MELEE_WEAPONS = [
     ],
   },
   {
-    id: "pole", name: "Palo d'acciaio", desc: "Portata e danno massimi. Non fa sconti.",
+    id: "pole", name: "Palo d'acciaio", desc: "Portata e danno massimi tra le lame e i pali. Non fa sconti.",
     cost: 420, damage: 75, range: 94, cooldown: 0.6,
     upgrades: [
       { id: "pole_reinforced", name: "Palo rinforzato", desc: "Struttura rinforzata: ancora più danno.", cost: 220, damage: 18 },
+    ],
+  },
+  {
+    id: "hammer", name: "Martello", desc: "Il colpo più pesante di tutti: lentissimo da rialzare, ma devastante.",
+    cost: 650, damage: 105, range: 86, cooldown: 0.78,
+    upgrades: [
+      { id: "hammer_reinforced", name: "Testa rinforzata", desc: "Testa più pesante: ancora più danno.", cost: 320, damage: 26 },
     ],
   },
 ];
@@ -246,6 +267,43 @@ const RANGED_WEAPONS = [
       { id: "smg_mag", name: "Caricatore esteso", desc: "Più munizioni massime.", cost: 140, maxAmmo: 15 },
     ],
   },
+  {
+    id: "sniper", name: "Cecchino", desc: "Un colpo lentissimo ma devastante: quasi sempre un one-shot.",
+    cost: 850, damage: 90, cooldown: 1.4, projectileSpeed: 900, minZone: 7, maxAmmo: 8, costPerAmmo: 25,
+    upgrades: [
+      { id: "sniper_sight", name: "Mirino", desc: "Aggancia i bersagli con più margine.", cost: 220, aimConeBonus: 0.05 },
+      { id: "sniper_stock", name: "Calcio", desc: "Cadenza di fuoco più rapida.", cost: 260, cooldownMult: 0.88 },
+      { id: "sniper_barrel", name: "Canna lunga", desc: "Più danno per colpo.", cost: 300, damage: 20 },
+      { id: "sniper_mag", name: "Caricatore esteso", desc: "Più munizioni massime.", cost: 200, maxAmmo: 3 },
+    ],
+  },
+  // Fires several pellets per colpo in un piccolo cono: `damage` è il danno
+  // di ogni singolo pallino, non del colpo intero — vicino fa malissimo,
+  // a distanza i pallini si allargano e mancano più facilmente il bersaglio.
+  {
+    id: "shotgun", name: "Shotgun", desc: "Spara una rosa di pallini: devastante da vicino, un solo colpo per cartuccia.",
+    cost: 1300, damage: 14, cooldown: 0.9, projectileSpeed: 520, minZone: 9, maxAmmo: 20, costPerAmmo: 10,
+    pellets: 6, spread: Math.PI / 9,
+    upgrades: [
+      { id: "shotgun_sight", name: "Mirino", desc: "Aggancia i bersagli con più margine.", cost: 200, aimConeBonus: 0.06 },
+      { id: "shotgun_stock", name: "Calcio", desc: "Cadenza di fuoco più rapida.", cost: 220, cooldownMult: 0.9 },
+      { id: "shotgun_barrel", name: "Canna lunga", desc: "Più danno per pallino.", cost: 240, damage: 4 },
+      { id: "shotgun_mag", name: "Caricatore esteso", desc: "Più cartucce massime.", cost: 170, maxAmmo: 6 },
+    ],
+  },
+  // splashRadius: al contatto esplode danneggiando tutti i nemici nel raggio,
+  // non solo quello colpito — vedi la gestione dedicata in Game.update().
+  {
+    id: "rocket", name: "Lanciarazzi", desc: "Razzo lento ma con danno ad area enorme: spazza via gruppi interi.",
+    cost: 2200, damage: 140, cooldown: 1.8, projectileSpeed: 380, minZone: 11, maxAmmo: 4, costPerAmmo: 60,
+    splashRadius: 90,
+    upgrades: [
+      { id: "rocket_sight", name: "Mirino", desc: "Aggancia i bersagli con più margine.", cost: 400, aimConeBonus: 0.08 },
+      { id: "rocket_stock", name: "Calcio", desc: "Cadenza di fuoco più rapida.", cost: 450, cooldownMult: 0.85 },
+      { id: "rocket_barrel", name: "Canna lunga", desc: "Più danno d'esplosione.", cost: 500, damage: 30 },
+      { id: "rocket_mag", name: "Caricatore esteso", desc: "Più razzi massimi.", cost: 350, maxAmmo: 2 },
+    ],
+  },
 ];
 
 // Consumable throwables, bought in stacks (not sequential tiers) and thrown
@@ -256,6 +314,8 @@ const THROWABLES = [
   { id: "sticky", name: "Bomba adesiva", desc: "Si attacca al primo nemico colpito ed esplode con danno enorme.", cost: 1500, kind: "damage", radius: 55, damage: 130, fuse: 1.4, maxCarry: 4, sticky: true },
   { id: "smoke", name: "Granata fumogena", desc: "Acceca i nemici nella zona: smettono di inseguirti per qualche secondo.", cost: 1250, kind: "cc", ccType: "smoke", radius: 100, duration: 4, fuse: 0.5, maxCarry: 4 },
   { id: "flashbang", name: "Granata stordente", desc: "Stordisce i nemici vicini, bloccandoli sul posto per qualche secondo.", cost: 1350, kind: "cc", ccType: "stun", radius: 110, duration: 2.5, fuse: 0.4, maxCarry: 4 },
+  { id: "throwknife", name: "Coltello da lancio", desc: "Lama leggera, colpisce quasi all'istante ma fa meno danno di una granata.", cost: 1000, kind: "damage", radius: 30, damage: 45, fuse: 0.12, maxCarry: 8 },
+  { id: "shuriken", name: "Shuriken", desc: "Lama piccola e velocissima, perfetta per liberarti in fretta di un nemico isolato.", cost: 1050, kind: "damage", radius: 26, damage: 40, fuse: 0.08, maxCarry: 10 },
 ];
 const THROW_RANGE = 260;
 const THROW_CONE = Math.PI / 6;
@@ -332,6 +392,21 @@ const ENEMY_TYPES = [
     attackRangeOverride: 260, // used as the firing range for this type, not melee reach
     detectRangeOverride: 420,
     weight: (zone) => (zone < 5 ? 0 : 0.15 + (zone - 5) * 0.07),
+  },
+  {
+    id: "driveby",
+    label: "Quelli del drive by",
+    color: "#3a3f4a",
+    radiusMult: 1.7,
+    speedMult: 2.6,
+    hpMult: 0.5, // fragile, but it's on screen only a couple of seconds
+    damageMult: 1.4, // multiplies the projectile damage it fires while passing through
+    cooldownMult: 1.0,
+    behavior: "driveby", // straight-line pass through the field, no chase/melee at all — see Enemy.updateDriveby
+    minZone: 6,
+    projectileSpeed: 480,
+    moneyMult: 2.2, // juicy bonus if you manage to shoot the car down before it leaves
+    weight: (zone) => (zone < 6 ? 0 : 0.12 + (zone - 6) * 0.04),
   },
 ];
 
@@ -437,6 +512,35 @@ function createRunState() {
 }
 
 /* =========================================================
+   SAVE / RESUME
+   The run only survives a death via this snapshot — see createRunState's own
+   comment. Saved whenever the game actually pauses (see Game.openUpgradeMenu),
+   so closing the tab mid-fight loses that wave but never the shop progress.
+========================================================= */
+const SAVE_KEY = "crazyTownSave";
+
+function saveRunState(snapshot) {
+  try {
+    localStorage.setItem(SAVE_KEY, JSON.stringify(snapshot));
+  } catch (e) {
+    // Private browsing / storage disabled: play on without persistence.
+  }
+}
+
+function loadRunState() {
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function clearRunState() {
+  try { localStorage.removeItem(SAVE_KEY); } catch (e) {}
+}
+
+/* =========================================================
    FLOATING TEXT (damage numbers, loot popups)
 ========================================================= */
 class FloatingText {
@@ -470,14 +574,15 @@ class FloatingText {
    PROJECTILE (fired by ranged weapons)
 ========================================================= */
 class Projectile {
-  constructor(x, y, angle, speed, damage, owner = "player") {
+  constructor(x, y, angle, speed, damage, owner = "player", splashRadius = 0) {
     this.x = x;
     this.y = y;
     this.vx = Math.cos(angle) * speed;
     this.vy = Math.sin(angle) * speed;
     this.damage = damage;
     this.owner = owner; // "player" | "enemy" — decides who it can hit
-    this.radius = 6;
+    this.splashRadius = splashRadius; // rocket launcher: area damage on impact instead of a single hit
+    this.radius = splashRadius ? 9 : 6;
     this.dead = false;
   }
   update(dt) {
@@ -489,7 +594,7 @@ class Projectile {
   }
   draw(ctx) {
     ctx.save();
-    ctx.fillStyle = this.owner === "enemy" ? "#ff6a6a" : "#ffe27a";
+    ctx.fillStyle = this.owner === "enemy" ? "#ff6a6a" : this.splashRadius ? "#ff8a3d" : "#ffe27a";
     ctx.beginPath();
     ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
     ctx.fill();
@@ -702,6 +807,7 @@ class Player {
     const meleeBonus = sumWeaponUpgrades(meleeWeapon, run.meleeWeaponUpgrades);
     const meleeCooldown = meleeWeapon.cooldown * meleeBonus.cooldownMult;
     this.melee = {
+      id: meleeWeapon.id,
       name: meleeWeapon.name,
       damage: meleeWeapon.damage + gymBonus + meleeBonus.damage,
       range: meleeWeapon.range + meleeBonus.range,
@@ -730,6 +836,9 @@ class Player {
         projectileSpeed: rw.projectileSpeed,
         maxAmmo: newMaxAmmo,
         aimConeBonus: rangedBonus.aimConeBonus,
+        pellets: rw.pellets || 1,
+        spread: rw.spread || 0,
+        splashRadius: rw.splashRadius || 0,
       };
     } else {
       this.ranged = null;
@@ -792,13 +901,20 @@ class Player {
     this.rangedCooldownTimer = this.ranged.cooldown;
     this.ammo--;
     const muzzle = this.radius + 8;
-    game.spawnProjectile(
-      this.x + Math.cos(angle) * muzzle,
-      this.y + Math.sin(angle) * muzzle,
-      angle,
-      this.ranged.projectileSpeed,
-      this.ranged.damage
-    );
+    const pellets = this.ranged.pellets;
+    for (let i = 0; i < pellets; i++) {
+      // Single-pellet weapons fire straight down `angle`; multi-pellet ones
+      // (shotgun) fan out evenly across `spread`, centered on it.
+      const a = pellets > 1 ? angle + (i / (pellets - 1) - 0.5) * this.ranged.spread : angle;
+      game.spawnProjectile(
+        this.x + Math.cos(a) * muzzle,
+        this.y + Math.sin(a) * muzzle,
+        a,
+        this.ranged.projectileSpeed,
+        this.ranged.damage,
+        this.ranged.splashRadius
+      );
+    }
     SoundManager.shoot();
   }
 
@@ -891,7 +1007,7 @@ class Player {
       const bob = this.isMoving ? Math.sin(this.walkPhase) * 3 : 0;
       const size = this.radius * 3.6;
       ctx.save();
-      ctx.rotate(this.facing + Math.PI / 2); // sprite art faces "up" (-PI/2) by default
+      ctx.rotate(this.facing + Math.PI / 2); // sprite art faces "up" by default
       ctx.drawImage(sprite, -size / 2, -size / 2 + bob, size, size);
       if (this.hitFlash > 0) {
         ctx.globalCompositeOperation = "source-atop";
@@ -908,6 +1024,21 @@ class Player {
       ctx.strokeStyle = "#1c2b3d";
       ctx.lineWidth = 2;
       ctx.stroke();
+    }
+
+    // Weapon overlay: hands+weapon floating at chest height, drawn on top of
+    // the body. Shows the ranged weapon (rotated to aim, independent of body
+    // facing) when one is equipped, otherwise the current melee weapon
+    // (rotated with facing, like the body).
+    const weaponId = this.ranged ? this._rangedWeaponId : (this.melee && this.melee.id);
+    const weaponSprite = weaponId && Sprites.get(weaponId);
+    if (weaponSprite) {
+      const weaponAngle = this.ranged ? this.aimAngle : this.facing;
+      const size = this.radius * 3.6;
+      ctx.save();
+      ctx.rotate(weaponAngle + Math.PI / 2);
+      ctx.drawImage(weaponSprite, -size / 2, -size / 2, size, size);
+      ctx.restore();
     }
 
     // aim indicator: only meaningful with a ranged weapon, and only worth
@@ -941,7 +1072,7 @@ class Enemy {
     this.attackCooldownTimer = rand(0, 0.4);
     this.dead = false;
     this.hitFlash = 0;
-    this.facing = -Math.PI / 2; // matches the sprite's default "up" pose
+    this.facing = -Math.PI / 2; // default facing until movement/AI takes over
     this.isMoving = false;
     this.walkPhase = 0;
 
@@ -957,6 +1088,9 @@ class Enemy {
     // "ranged" behavior
     this.strafeDir = Math.random() < 0.5 ? -1 : 1;
 
+    // "driveby" behavior — set by Game.spawnDriveby right after construction
+    this.drivebyDir = 1;
+
     // crowd control from smoke/stun bombs
     this.ccTimer = 0;
     this.ccType = null; // "smoke" | "stun"
@@ -966,6 +1100,11 @@ class Enemy {
     if (this.dead) return;
     if (this.attackCooldownTimer > 0) this.attackCooldownTimer -= dt;
     if (this.hitFlash > 0) this.hitFlash -= dt;
+
+    if (this.type.behavior === "driveby") {
+      this.updateDriveby(dt, player, game);
+      return; // ignores CC, separation and the normal field-boundary clamp entirely
+    }
 
     if (this.ccTimer > 0) {
       this.ccTimer -= dt;
@@ -1008,6 +1147,25 @@ class Enemy {
     const margin = this.radius + 4;
     this.x = clamp(this.x, margin, CONFIG.width - margin);
     this.y = clamp(this.y, margin + 60, CONFIG.height - margin);
+  }
+
+  // Straight-line pass across the field: never turns, never melees, just
+  // fires at the player on a timer until it drives off the far edge. Cooldown
+  // and hit-flash timers are already ticked down by the caller (update()).
+  updateDriveby(dt, player, game) {
+    this.x += this.drivebyDir * this.stats.speed * dt;
+    this.isMoving = true;
+
+    if (this.attackCooldownTimer <= 0) {
+      this.attackCooldownTimer = this.stats.attackCooldown;
+      const angle = Math.atan2(player.y - this.y, player.x - this.x);
+      game.spawnEnemyProjectile(this.x, this.y, angle, this.type.projectileSpeed, this.stats.damage);
+    }
+
+    if (this.x < -60 || this.x > CONFIG.width + 60) {
+      this.dead = true;
+      game.onDrivebyExit();
+    }
   }
 
   // Kites to stay near its preferred range instead of closing to melee, and
@@ -1123,12 +1281,14 @@ class Enemy {
     ctx.save();
     ctx.translate(this.x, this.y);
 
+    // Top-down sprite per enemy type (rotated to facing) once loaded,
+    // falling back to the original vector shapes until then.
     const sprite = Sprites.get(this.type.id);
     if (sprite) {
       const bob = this.isMoving ? Math.sin(this.walkPhase) * 2 : 0;
       const size = this.radius * 3.6;
       ctx.save();
-      ctx.rotate(this.facing + Math.PI / 2); // sprite art faces "up" (-PI/2) by default
+      ctx.rotate(this.facing + Math.PI / 2); // sprite art faces "up" by default
       ctx.drawImage(sprite, -size / 2, -size / 2 + bob, size, size);
       if (this.hitFlash > 0) {
         ctx.globalCompositeOperation = "source-atop";
@@ -1137,6 +1297,8 @@ class Enemy {
         ctx.globalCompositeOperation = "source-over";
       }
       ctx.restore();
+    } else if (this.type.behavior === "driveby") {
+      this.drawCar(ctx);
     } else {
       ctx.fillStyle = this.hitFlash > 0 ? "#ffffff" : this.type.color;
       ctx.beginPath();
@@ -1167,6 +1329,21 @@ class Enemy {
       ctx.fillText(this.ccType === "stun" ? "☆" : "?", this.x, this.y - this.radius - 14);
       ctx.restore();
     }
+  }
+
+  // Simple vector car (matches the rest of the game's shape-only art): a body
+  // rectangle oriented along its travel direction, with two riders inside.
+  drawCar(ctx) {
+    const w = this.radius * 2.6, h = this.radius * 1.4;
+    if (this.drivebyDir < 0) ctx.rotate(Math.PI);
+    ctx.fillStyle = this.hitFlash > 0 ? "#ffffff" : this.type.color;
+    ctx.fillRect(-w / 2, -h / 2, w, h);
+    ctx.strokeStyle = "#00000066";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(-w / 2, -h / 2, w, h);
+    ctx.fillStyle = "#c7cad1";
+    ctx.beginPath(); ctx.arc(-w * 0.18, 0, this.radius * 0.26, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(w * 0.18, 0, this.radius * 0.26, 0, Math.PI * 2); ctx.fill();
   }
 }
 
@@ -1237,7 +1414,7 @@ class InputHandler {
     if (e.code === "KeyG") { if (this.onThrowBomb) this.onThrowBomb(); }
     if (e.code.startsWith("Digit")) {
       const n = parseInt(e.code.slice(5), 10);
-      if (n >= 1 && n <= 5 && this.onSelectBomb) this.onSelectBomb(n - 1, true);
+      if (n >= 1 && n <= THROWABLES.length && this.onSelectBomb) this.onSelectBomb(n - 1, true);
     }
   }
   handleUp(e) {
@@ -1351,6 +1528,7 @@ class Game {
     this.bindTouchControls();
     this.setupResponsiveScaling();
     this.updateHUDStatic();
+    this.refreshSaveSummary();
     this.loop = this.loop.bind(this);
     requestAnimationFrame(this.loop);
   }
@@ -1358,7 +1536,12 @@ class Game {
   bindUI() {
     document.getElementById("start-btn").addEventListener("click", () => {
       SoundManager.ensure();
+      clearRunState(); // starting fresh deliberately abandons any saved run
       this.startRun();
+    });
+    document.getElementById("continue-btn").addEventListener("click", () => {
+      SoundManager.ensure();
+      this.resumeRun();
     });
     document.getElementById("restart-btn").addEventListener("click", () => {
       this.startRun();
@@ -1370,6 +1553,66 @@ class Game {
       SoundManager.muted = !SoundManager.muted;
       document.getElementById("mute-btn").textContent = SoundManager.muted ? "🔇" : "🔊";
     });
+  }
+
+  // Shows/hides the "Continua partita" button on the start screen depending
+  // on whether a paused run was saved (see saveGame()).
+  refreshSaveSummary() {
+    const saved = loadRunState();
+    const btn = document.getElementById("continue-btn");
+    const summary = document.getElementById("save-summary");
+    if (saved) {
+      btn.classList.remove("hidden");
+      summary.classList.remove("hidden");
+      summary.textContent = `Partita salvata — Zona ${saved.zone}, € ${saved.run.money}`;
+    } else {
+      btn.classList.add("hidden");
+      summary.classList.add("hidden");
+    }
+  }
+
+  // Backfills any run fields introduced after a save was written, so an
+  // older save doesn't crash against newer content (new upgrade ids, etc.).
+  normalizeRun(run) {
+    UPGRADES.forEach(u => { if (run.upgrades[u.id] == null) run.upgrades[u.id] = 0; });
+    if (run.meleeTier == null) run.meleeTier = 0;
+    if (run.rangedTier == null) run.rangedTier = -1;
+    if (!run.meleeWeaponUpgrades) run.meleeWeaponUpgrades = [];
+    if (!run.rangedWeaponUpgrades) run.rangedWeaponUpgrades = [];
+    if (!run.bombs) run.bombs = {};
+    if (run.playerLevel == null) run.playerLevel = 0;
+    if (run.money == null) run.money = 0;
+    return run;
+  }
+
+  // Restores the shop progress (money, upgrades, weapons, zone reached) from
+  // the last save; the wave in progress when it was saved is not replayed,
+  // the zone simply restarts fresh — see the SAVE / RESUME header comment.
+  resumeRun() {
+    const saved = loadRunState();
+    if (!saved) { this.startRun(); return; }
+    this.run = this.normalizeRun(saved.run);
+    this.zone = saved.zone || 1;
+    this.moneyThisRun = 0;
+    this.player.refreshLoadout(this.run);
+    this.player.resetForRun();
+    if (saved.playerHp != null) this.player.hp = clamp(saved.playerHp, 1, this.player.maxHp);
+    this.player.x = CONFIG.width / 2;
+    this.player.y = CONFIG.height / 2;
+    this.enemies = [];
+    this.projectiles = [];
+    this.pickups = [];
+    this.bombs = [];
+    this.player.selectedThrowable = 0;
+    this.floatingTexts = [];
+    this.setState("playing");
+    this.startZone();
+  }
+
+  // See the SAVE / RESUME header comment: called every time the game
+  // actually pauses (openUpgradeMenu), not continuously.
+  saveGame() {
+    saveRunState({ zone: this.zone, run: this.run, playerHp: this.player.hp });
   }
 
   detectTouchDevice() {
@@ -1512,8 +1755,8 @@ class Game {
       attackRange: type.attackRangeOverride || s.attackRange,
       detectRange: type.detectRangeOverride || s.detectRange,
       moneyRange: [
-        Math.round(s.baseMoneyDrop[0] * (1 + sc.moneyPerZone * z)),
-        Math.round(s.baseMoneyDrop[1] * (1 + sc.moneyPerZone * z)),
+        Math.round(s.baseMoneyDrop[0] * (1 + sc.moneyPerZone * z) * (type.moneyMult || 1)),
+        Math.round(s.baseMoneyDrop[1] * (1 + sc.moneyPerZone * z) * (type.moneyMult || 1)),
       ],
     };
   }
@@ -1550,6 +1793,9 @@ class Game {
   }
 
   spawnEnemy() {
+    const type = pickEnemyType(this.zone);
+    if (type.behavior === "driveby") { this.spawnDriveby(type); return; }
+
     const edge = randInt(0, 3);
     let x, y;
     const m = 30;
@@ -1558,13 +1804,27 @@ class Game {
     else if (edge === 2) { x = m; y = rand(90, CONFIG.height - m); }
     else { x = CONFIG.width - m; y = rand(90, CONFIG.height - m); }
 
-    const type = pickEnemyType(this.zone);
     const zoneStats = this.enemyStatsForZone(this.zone, type);
     this.enemies.push(new Enemy(x, y, zoneStats, type));
   }
 
-  spawnProjectile(x, y, angle, speed, damage) {
-    this.projectiles.push(new Projectile(x, y, angle, speed, damage, "player"));
+  // Enters from the left or right edge near the player's current lane and
+  // drives straight across at high speed, firing as it passes — it never
+  // chases or melees (see Enemy.updateDriveby). Killing it before it exits
+  // pays out a bonus (see moneyMult); otherwise it just leaves the field.
+  spawnDriveby(type) {
+    const fromLeft = Math.random() < 0.5;
+    const x = fromLeft ? -50 : CONFIG.width + 50;
+    const y = clamp(this.player.y + rand(-80, 80), 90, CONFIG.height - 30);
+    const zoneStats = this.enemyStatsForZone(this.zone, type);
+    const enemy = new Enemy(x, y, zoneStats, type);
+    enemy.drivebyDir = fromLeft ? 1 : -1;
+    enemy.facing = fromLeft ? 0 : Math.PI;
+    this.enemies.push(enemy);
+  }
+
+  spawnProjectile(x, y, angle, speed, damage, splashRadius) {
+    this.projectiles.push(new Projectile(x, y, angle, speed, damage, "player", splashRadius));
   }
 
   spawnEnemyProjectile(x, y, angle, speed, damage) {
@@ -1654,6 +1914,13 @@ class Game {
     }
   }
 
+  // A drive-by car that reaches the far edge alive just leaves — it still
+  // has to count against the wave total (same bookkeeping as a kill) or the
+  // wave would never complete, but it pays no money since nobody beat it.
+  onDrivebyExit() {
+    this.waveEnemiesDefeated++;
+  }
+
   // At most one pickup per kill: a medikit if the player could use one,
   // otherwise a shot at ammo if they're carrying a gun.
   rollPickupDrop(enemy) {
@@ -1736,6 +2003,7 @@ class Game {
     this.renderAmmoShop();
     this.renderBombShop();
     document.getElementById("upgrade-screen").classList.remove("hidden");
+    this.saveGame();
   }
 
   closeUpgradeMenu() {
@@ -2013,6 +2281,7 @@ class Game {
   triggerGameOver() {
     this.setState("gameover");
     SoundManager.gameover();
+    clearRunState(); // death wipes the run — nothing left worth resuming
     document.getElementById("final-zone").textContent = this.zone;
     document.getElementById("final-money").textContent = Math.max(0, this.moneyThisRun);
   }
@@ -2107,7 +2376,17 @@ class Game {
         for (const enemy of this.enemies) {
           if (enemy.dead || proj.dead) continue;
           if (dist(proj.x, proj.y, enemy.x, enemy.y) <= proj.radius + enemy.radius) {
-            this.damageEnemy(enemy, proj.damage);
+            if (proj.splashRadius) {
+              // Rocket: damages every enemy within the blast, not just the one hit.
+              SoundManager.explosion();
+              for (const e2 of this.enemies) {
+                if (!e2.dead && dist(proj.x, proj.y, e2.x, e2.y) <= proj.splashRadius) {
+                  this.damageEnemy(e2, proj.damage);
+                }
+              }
+            } else {
+              this.damageEnemy(enemy, proj.damage);
+            }
             proj.dead = true;
           }
         }

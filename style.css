@@ -175,6 +175,7 @@ canvas {
   border: 2px solid var(--panel-border);
   box-shadow: 0 0 24px rgba(232, 163, 61, 0.25);
   margin-bottom: 10px;
+  background: #000;
 }
 
 h1 { margin: 0 0 4px; font-size: 34px; letter-spacing: 0.5px; color: var(--accent); }
@@ -226,22 +227,13 @@ h2 { margin: 0 0 4px; color: var(--accent); }
   border-radius: 50%;
   flex-shrink: 0;
   border: 1px solid var(--panel-border);
+  background: #000;
 }
 .legend-dot {
   width: 10px;
   height: 10px;
   border-radius: 50%;
   flex-shrink: 0;
-}
-
-.weapon-reference {
-  display: block;
-  width: 100%;
-  max-height: 160px;
-  object-fit: cover;
-  border-radius: 8px;
-  border: 1px solid var(--panel-border);
-  margin-bottom: 10px;
 }
 
 .section-title {
@@ -275,6 +267,7 @@ h2 { margin: 0 0 4px; color: var(--accent); }
 }
 .btn-primary:hover { transform: translateY(-1px); }
 .btn-primary:active { transform: translateY(1px); }
+#continue-btn, #start-btn { margin: 4px 6px; }
 
 .upgrade-list {
   display: grid;
