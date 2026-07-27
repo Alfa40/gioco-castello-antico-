@@ -129,6 +129,18 @@ const WEAPON_SPRITE_ANGLE_CORRECTION = {
   rocket: 75.5 * Math.PI / 180,
 };
 
+// The humanoid enemy reference portraits hold their arms/item toward the
+// BOTTOM of their own frame (their forward/attack direction), unlike the
+// weapon icons above and the driveby car — those need a 180deg correction on
+// top of the usual facing rotation, or they visually walk/attack backwards.
+const ENEMY_SPRITE_ANGLE_CORRECTION = {
+  balordo: Math.PI,
+  nervoso: Math.PI,
+  imprevedibile: Math.PI,
+  bruto: Math.PI,
+  tiratore: Math.PI,
+};
+
 // Draws `img` centered at the current origin, scaled so its longer side
 // equals targetMax while preserving its own aspect ratio — the top-down
 // sprites have very different width/height ratios (a knife icon vs a car),
@@ -148,7 +160,7 @@ const UPGRADES = [
     desc: "Aumenta il danno dei tuoi colpi.",
     baseCost: 40,
     growth: 1.45,
-    maxLevel: 6,
+    maxLevel: 10,
     perLevel: 3, // + damage
   },
   {
@@ -157,7 +169,7 @@ const UPGRADES = [
     desc: "Aumenta velocità di movimento e scatto.",
     baseCost: 35,
     growth: 1.4,
-    maxLevel: 6,
+    maxLevel: 10,
     perLevel: 0.045, // multiplier bonus
   },
   {
@@ -166,8 +178,8 @@ const UPGRADES = [
     desc: "Riduce il danno che subisci.",
     baseCost: 45,
     growth: 1.48,
-    maxLevel: 6,
-    perLevel: 0.06, // damage reduction fraction
+    maxLevel: 10,
+    perLevel: 0.075, // damage reduction fraction — 10 levels exactly reach the 0.75 clamp in refreshLoadout()
   },
   {
     id: "firstaid",
@@ -175,7 +187,7 @@ const UPGRADES = [
     desc: "Aumenta i punti vita massimi.",
     baseCost: 50,
     growth: 1.42,
-    maxLevel: 6,
+    maxLevel: 10,
     perLevel: 14, // + max hp
   },
   {
@@ -184,8 +196,8 @@ const UPGRADES = [
     desc: "Riduce i soldi che i criminali riescono a rubarti.",
     baseCost: 55,
     growth: 1.48,
-    maxLevel: 5,
-    perLevel: 0.18, // steal reduction fraction
+    maxLevel: 10,
+    perLevel: 0.09, // steal reduction fraction — 10 levels exactly reach the 0.9 clamp in refreshLoadout()
   },
   {
     id: "door",
@@ -193,8 +205,8 @@ const UPGRADES = [
     desc: "Recuperi un po' di vita all'inizio di ogni zona.",
     baseCost: 75,
     growth: 1.6,
-    maxLevel: 3,
-    perLevel: 0.12, // fraction of missing hp healed on new zone
+    maxLevel: 10,
+    perLevel: 0.09, // fraction of missing hp healed on new zone — 10 levels exactly reach the 0.9 clamp in refreshLoadout()
   },
 ];
 
@@ -1037,9 +1049,10 @@ class Player {
     }
 
     // Weapon overlay: a single hand+weapon icon (authored pointing "up",
-    // hand at the bottom), offset forward of the head so it reads as an arm
-    // reaching out in the aim/facing direction rather than sitting under the
-    // head. Shows the ranged weapon (rotated to aim, independent of body
+    // hand at the bottom), offset to the side and slightly forward of the
+    // head so it reads as an arm held out beside the body in the aim/facing
+    // direction, rather than sitting centered under the head. Shows the
+    // ranged weapon (rotated to aim, independent of body
     // facing) when one is equipped, otherwise the current melee weapon
     // (rotated with facing, like the body).
     const weaponId = this.ranged ? this._rangedWeaponId : (this.melee && this.melee.id);
@@ -1049,7 +1062,7 @@ class Player {
       const size = this.radius * 2.6;
       ctx.save();
       ctx.rotate(weaponAngle + Math.PI / 2 - (WEAPON_SPRITE_ANGLE_CORRECTION[weaponId] || 0));
-      ctx.translate(0, -this.radius * 0.45);
+      ctx.translate(this.radius * 0.5, -this.radius * 0.35); // to the side and slightly forward, not centered on the head
       drawSpriteFit(ctx, weaponSprite, size);
       ctx.restore();
     }
@@ -1304,7 +1317,13 @@ class Enemy {
       const bob = this.isMoving ? Math.sin(this.walkPhase) * 2 : 0;
       const size = this.radius * 3.6;
       ctx.save();
-      ctx.rotate(this.facing + Math.PI / 2); // sprite art faces "up" by default
+      // Sprite convention is "faces up" EXCEPT the humanoid reference
+      // portraits, whose arms/held item hang toward the BOTTOM of their own
+      // frame (their actual forward/attack direction) — so those need an
+      // extra 180deg on top of the usual facing rotation, or they render
+      // walking/attacking backwards. The driveby car's front is already at
+      // the top of its frame, so it's excluded (see ENEMY_SPRITE_ANGLE_CORRECTION).
+      ctx.rotate(this.facing + Math.PI / 2 + (ENEMY_SPRITE_ANGLE_CORRECTION[this.type.id] || 0));
       const { w, h } = drawSpriteFit(ctx, sprite, size, bob);
       if (this.hitFlash > 0) {
         ctx.globalCompositeOperation = "source-atop";
