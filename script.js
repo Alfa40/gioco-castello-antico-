@@ -422,11 +422,11 @@ const ENEMY_TYPES = [
     speedMult: 2.6,
     hpMult: 0.5, // fragile, but it's on screen only a couple of seconds
     damageMult: 1.4, // multiplies the projectile damage it fires while passing through
-    cooldownMult: 1.0,
+    cooldownMult: 0.5, // fires roughly twice as often during its transit
     behavior: "driveby", // straight-line pass through the field, no chase/melee at all — see Enemy.updateDriveby
     minZone: 6,
     projectileSpeed: 480,
-    moneyMult: 2.2, // juicy bonus if you manage to shoot the car down before it leaves
+    moneyMult: 5, // juicy bonus if you manage to shoot the car down before it leaves
     weight: (zone) => (zone < 6 ? 0 : 0.12 + (zone - 6) * 0.04),
   },
 ];
@@ -1049,10 +1049,11 @@ class Player {
     }
 
     // Weapon overlay: a single hand+weapon icon (authored pointing "up",
-    // hand at the bottom), offset to the side and slightly forward of the
-    // head so it reads as an arm held out beside the body in the aim/facing
-    // direction, rather than sitting centered under the head. Shows the
-    // ranged weapon (rotated to aim, independent of body
+    // hand at the bottom), offset forward of the head so it reads as an arm
+    // reaching out in the aim/facing direction. Every weapon but the fists
+    // is also offset to the side (held out beside the body); the fists stay
+    // centered, like a guard stance in front of the face rather than off to
+    // one side. Shows the ranged weapon (rotated to aim, independent of body
     // facing) when one is equipped, otherwise the current melee weapon
     // (rotated with facing, like the body).
     const weaponId = this.ranged ? this._rangedWeaponId : (this.melee && this.melee.id);
@@ -1060,9 +1061,10 @@ class Player {
     if (weaponSprite) {
       const weaponAngle = this.ranged ? this.aimAngle : this.facing;
       const size = this.radius * 2.6;
+      const sideOffset = weaponId === "fists" ? 0 : this.radius * 0.5;
       ctx.save();
       ctx.rotate(weaponAngle + Math.PI / 2 - (WEAPON_SPRITE_ANGLE_CORRECTION[weaponId] || 0));
-      ctx.translate(this.radius * 0.5, -this.radius * 0.35); // to the side and slightly forward, not centered on the head
+      ctx.translate(sideOffset, -this.radius * 0.6);
       drawSpriteFit(ctx, weaponSprite, size);
       ctx.restore();
     }
@@ -1659,30 +1661,31 @@ class Game {
   // ratio, via a CSS transform — the canvas keeps its native resolution and
   // every pixel-based HUD/panel style stays correct at any screen size.
   //
-  // On a phone/tablet held upright, the canvas is NOT rotated: the game
-  // field must stay clean with all controls outside of it (see #touch-controls
-  // CSS), so instead the container grows downward by CONTROL_STRIP_HEIGHT to
-  // make room for a control strip below the field, and that taller box is
-  // what gets scaled to fit the viewport — the buttons never sit on top of
-  // the canvas. A narrow desktop *browser window* (no touch) keeps the old
-  // 90deg-rotate trick instead, since there's no touch strip to place there.
+  // On a phone/tablet, the canvas is NEVER rotated and the game field must
+  // stay clean: HUD text and touch controls both live outside of it, in
+  // strips above/below (portrait) or panels left/right (landscape) — see the
+  // .portrait-controls / .landscape-controls CSS, which also owns the fixed
+  // pixel size of #game-container for each case (this function just has to
+  // know those same totals to compute a matching scale). A narrow desktop
+  // *browser window* (no touch) keeps the old 90deg-rotate trick instead,
+  // since there's no touch UI to place outside the field there.
   setupResponsiveScaling() {
     const container = document.getElementById("game-container");
-    const CONTROL_STRIP_HEIGHT = 260;
+    // Must match the #game-container width/height in the corresponding CSS class.
+    const PORTRAIT_TOTAL = { w: 960, h: 1210 };
+    const LANDSCAPE_TOTAL = { w: 1740, h: 700 };
     const fit = () => {
       const isTouch = document.documentElement.classList.contains("touch-device");
       const portrait = window.innerHeight > window.innerWidth;
-      const usesStrip = isTouch && portrait;
-      document.documentElement.classList.toggle("portrait-controls", usesStrip);
-      if (usesStrip) {
+      document.documentElement.classList.toggle("portrait-controls", isTouch && portrait);
+      document.documentElement.classList.toggle("landscape-controls", isTouch && !portrait);
+      if (isTouch) {
         this.portraitRotated = false;
-        const logicalHeight = CONFIG.height + CONTROL_STRIP_HEIGHT;
-        container.style.height = `${logicalHeight}px`;
-        const scale = Math.min(window.innerWidth / CONFIG.width, window.innerHeight / logicalHeight);
+        const total = portrait ? PORTRAIT_TOTAL : LANDSCAPE_TOTAL;
+        const scale = Math.min(window.innerWidth / total.w, window.innerHeight / total.h);
         container.style.transform = `scale(${scale})`;
       } else {
-        this.portraitRotated = portrait; // desktop-window-narrow fallback only (no touch strip involved)
-        container.style.height = `${CONFIG.height}px`;
+        this.portraitRotated = portrait; // desktop-window-narrow fallback only (no touch UI involved)
         const scale = portrait
           ? Math.min(window.innerWidth / CONFIG.height, window.innerHeight / CONFIG.width)
           : Math.min(window.innerWidth / CONFIG.width, window.innerHeight / CONFIG.height);
@@ -1728,7 +1731,7 @@ class Game {
   bindJoystick() {
     const base = document.getElementById("joystick-base");
     const knob = document.getElementById("joystick-knob");
-    const knobTravel = 37; // logical px the knob can drift from center, independent of screen scale
+    const knobTravel = 74; // logical px the knob can drift from center, independent of screen scale (matches the 2x joystick-base size)
     let touchId = null;
 
     const update = (clientX, clientY) => {
