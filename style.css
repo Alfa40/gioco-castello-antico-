@@ -367,15 +367,16 @@ html.touch-device.portrait-controls #touch-controls {
 
 /* Phone/tablet held sideways: HUD text + the movement joystick share a panel
    on the LEFT of the canvas (so the thumb that reads the stats above also
-   rests on the stick), the action buttons (attack/dash/bomb/pause) live in a
-   panel on the RIGHT — both outside the field. #touch-controls itself spans
-   the full container width (it's just an invisible, pointer-events:none
+   rests on the stick), the aim stick + action buttons (dash/bomb/pause) live
+   in a panel on the RIGHT — both outside the field. #touch-controls itself
+   spans the full container width (it's just an invisible, pointer-events:none
    layer) so its children can be edge-anchored into either panel without
    moving them in the DOM; the actual visible panel backgrounds come from
-   #hud (left) — the right side has no boxed background, the buttons just
+   #hud (left) — the right side has no boxed background, the controls just
    float there. The shared container is taller than the canvas so the left
-   panel can fit HUD text + joystick stacked without overlap; canvas and HUD
-   are vertically centered within that taller height. */
+   panel can fit HUD text + joystick stacked (and the right one the aim stick
+   + action buttons) without overlap; canvas and HUD are vertically centered
+   within that taller height. */
 html.touch-device.landscape-controls #game-container { width: 1740px; height: 700px; }
 html.touch-device.landscape-controls canvas { position: absolute; top: 50px; left: 300px; }
 html.touch-device.landscape-controls #hud {
@@ -404,6 +405,9 @@ html.touch-device.landscape-controls #touch-controls {
 html.touch-device.landscape-controls .joystick-base {
   left: 20px; bottom: 40px; top: auto; right: auto;
 }
+html.touch-device.landscape-controls .aim-stick-base {
+  right: 110px; bottom: 40px; top: auto; left: auto;
+}
 html.touch-device.landscape-controls .touch-btn-pause {
   right: 200px; left: auto; margin-left: 0;
 }
@@ -412,7 +416,7 @@ html.touch-device.landscape-controls .touch-btn-pause {
    git history) — on-screen buttons this small were hard to hit reliably. */
 .joystick-base {
   position: absolute;
-  left: 72px;
+  left: 40px;
   bottom: 72px;
   width: 260px;
   height: 260px;
@@ -437,6 +441,29 @@ html.touch-device.landscape-controls .touch-btn-pause {
   transition: transform 0.03s linear;
 }
 
+/* Right-hand stick: replaces the old melee button — melee is now automatic
+   (see Player.autoMeleeAttack), so the thumb that used to tap "attack" now
+   aims the ranged weapon instead, independently of movement, exactly like
+   the gamepad's right stick (see Player.update's stickAim). Same size/feel
+   as the movement stick, mirrored to the opposite side, with a distinct
+   (cyan) knob color so the two are easy to tell apart at a glance. */
+.aim-stick-base {
+  position: absolute;
+  right: 40px;
+  bottom: 72px;
+  width: 260px;
+  height: 260px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  border: 2px solid rgba(255, 255, 255, 0.18);
+  pointer-events: all;
+  touch-action: none;
+}
+.aim-stick-knob {
+  background: rgba(62, 198, 224, 0.45);
+  border: 2px solid rgba(62, 198, 224, 0.7);
+}
+
 .touch-btn {
   position: absolute;
   pointer-events: all;
@@ -454,21 +481,30 @@ html.touch-device.landscape-controls .touch-btn-pause {
 }
 .touch-btn:active { background: rgba(232, 163, 61, 0.35); }
 
+/* Remaining action buttons (attack and manual fire are both gone — melee
+   and ranged-in-range both fire automatically on touch, see
+   Player.autoMeleeAttack / autoFireRanged — dash/bomb-throw/bomb-select stay
+   manual): dash centered on top, the two bomb buttons centered below it.
+   Sits in the gap between the two sticks (portrait) or above the aim stick
+   (landscape) — see the positioning rules further up for each mode. */
 #touch-action-cluster {
   position: absolute;
-  right: 48px;
-  bottom: 48px;
-  width: 440px;
-  height: 440px;
+  left: 370px;
+  top: 120px;
+  width: 220px;
+  height: 260px;
 }
-.touch-btn-large { width: 176px; height: 176px; right: 0; bottom: 0; font-size: 68px; }
-.touch-btn-medium { width: 132px; height: 132px; font-size: 52px; }
-#touch-dash { right: 192px; bottom: 16px; }
-#touch-fire { right: 16px; bottom: 192px; }
-.touch-btn-small { width: 104px; height: 104px; font-size: 44px; }
-#touch-bomb-throw { right: 192px; bottom: 192px; }
-.touch-btn-tiny { width: 76px; height: 76px; font-size: 32px; }
-#touch-bomb-select { right: 300px; bottom: 232px; }
+html.touch-device.landscape-controls #touch-action-cluster {
+  left: auto;
+  right: 130px;
+  top: 130px;
+}
+.touch-btn-medium { width: 132px; height: 132px; font-size: 52px; top: 10px; }
+#touch-dash { left: 44px; }
+.touch-btn-small { width: 104px; height: 104px; font-size: 44px; top: 158px; }
+#touch-bomb-throw { left: 12px; }
+.touch-btn-tiny { width: 76px; height: 76px; font-size: 32px; top: 158px; }
+#touch-bomb-select { left: 132px; }
 
 .touch-btn-pause {
   top: 24px;

@@ -35,17 +35,16 @@ L'acquisto di potenziamenti/armi nel negozio richiede ancora mouse o tastiera: i
 
 ### Telefono / tablet
 
-Il gioco è pensato per l'orizzontale: se apri la pagina da un dispositivo touch in verticale, ti viene chiesto di ruotarlo. La schermata si adatta automaticamente a qualsiasi dimensione dello schermo (nessuno zoom/pinch necessario). I controlli touch compaiono solo su dispositivi con schermo touch:
+Il campo di gioco resta sempre orizzontale, senza bisogno di ruotare il telefono: se lo tieni in verticale, testo (vita, zona, ecc.) e comandi si dispongono rispettivamente sopra e sotto al campo; in orizzontale si dividono ai due lati — in entrambi i casi restano sempre fuori dal campo di gioco stesso, che resta pulito. La schermata si adatta automaticamente a qualsiasi dimensione dello schermo. I controlli touch (grandi, per essere facili da premere) compaiono solo su dispositivi con schermo touch:
 
-- **Levetta virtuale** (in basso a sinistra) — Movimento
-- **Pugno** (grande, in basso a destra) — Attacca in mischia (si può tenere premuto)
+- **Levetta virtuale sinistra** — Movimento
+- **Levetta virtuale destra** — Mira, indipendente dal movimento (esattamente come la levetta destra del controller): serve a puntare l'arma a distanza dove vuoi, a prescindere da dove ti stai muovendo
 - **Fulmine** — Scatto/schivata
-- **Pistola** (compare solo con un'arma a distanza equipaggiata) — Spara manualmente
 - **Bomba** — Lancia l'esplosivo selezionato
 - **Freccette circolari** — Cambia l'esplosivo selezionato
-- **⏸** (in alto) — Pausa e menu potenziamenti casa
+- **⏸** — Pausa e menu potenziamenti casa
 
-Anche su telefono, con un'arma a distanza equipaggiata si spara comunque in automatico non appena la mira (che segue la direzione in cui ti muovi) incontra un nemico a portata.
+Su telefono sia l'attacco in mischia (colpisce tutto ciò che è a portata intorno a te, in qualsiasi direzione) che quello a distanza (quando la mira è su un nemico a portata) sono **automatici**: niente tasto pugno né tasto spara manuale, per evitare confusione con l'automatico. La levetta destra serve solo a puntare l'arma a distanza dove vuoi, e torna a seguire la direzione in cui ti muovi se la lasci al centro.
 
 ## Il loop di gioco
 
