@@ -154,6 +154,37 @@ canvas {
 .overlay.hidden { display: none; }
 .hidden { display: none !important; }
 
+/* #upgrade-screen lives outside #game-container in the DOM (see index.html)
+   specifically so it can escape the CSS scale transform that shrinks the
+   whole game box to fit a phone screen — without this, its text would
+   shrink right along with it. position:fixed here means it's sized against
+   the real device viewport, not the scaled-down game box. */
+#upgrade-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+}
+
+/* On touch specifically, the panel itself goes edge-to-edge (not just the
+   dark backdrop) — there's no reason to waste phone screen real estate on
+   margins when the whole point is fitting more upgrades/weapons on screen
+   at a readable size — plus a modest font bump on the pieces that stayed
+   small even at native scale. */
+html.touch-device #upgrade-screen .panel {
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 0;
+}
+html.touch-device #upgrade-screen .section-title { font-size: 14px; }
+html.touch-device #upgrade-screen .upgrade-card h3 { font-size: 16px; }
+html.touch-device #upgrade-screen .upgrade-card p { font-size: 13px; }
+html.touch-device #upgrade-screen .upgrade-card .level { font-size: 13px; }
+html.touch-device #upgrade-screen .upgrade-card button { font-size: 14px; padding: 8px 14px; }
+html.touch-device #upgrade-screen .money-label { font-size: 16px; }
+html.touch-device #upgrade-screen .btn-primary { font-size: 18px; padding: 14px 32px; }
+
 .panel {
   width: 620px;
   max-width: 90%;

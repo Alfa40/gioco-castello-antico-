@@ -115,45 +115,6 @@
     </div>
   </div>
 
-  <div id="upgrade-screen" class="overlay hidden">
-    <div class="panel">
-      <h2 id="upgrade-title">Potenzia casa</h2>
-      <p id="upgrade-subtitle" class="tagline"></p>
-
-      <h3 class="section-title first">Potenziamenti casa</h3>
-      <div id="upgrade-list" class="upgrade-list"></div>
-
-      <h3 class="section-title">Armi da mischia</h3>
-      <div id="melee-weapon-list" class="upgrade-list weapon-list"></div>
-
-      <div id="melee-weapon-upgrades-section" class="hidden">
-        <h3 class="section-title">Potenzia arma da mischia</h3>
-        <div id="melee-weapon-upgrades" class="upgrade-list weapon-list"></div>
-      </div>
-
-      <h3 class="section-title">Armi a distanza</h3>
-      <div id="ranged-weapon-list" class="upgrade-list weapon-list"></div>
-
-      <div id="ranged-weapon-upgrades-section" class="hidden">
-        <h3 class="section-title">Potenzia arma a distanza</h3>
-        <div id="ranged-weapon-upgrades" class="upgrade-list weapon-list"></div>
-      </div>
-
-      <div id="ammo-shop-section" class="hidden">
-        <h3 class="section-title">Munizioni</h3>
-        <div id="ammo-shop" class="upgrade-list weapon-list"></div>
-      </div>
-
-      <h3 class="section-title">Esplosivi</h3>
-      <div id="bomb-shop" class="upgrade-list weapon-list"></div>
-
-      <div class="upgrade-footer">
-        <div id="upgrade-money" class="money-label">€ 0</div>
-        <button id="upgrade-continue-btn" class="btn-primary">Continua</button>
-      </div>
-    </div>
-  </div>
-
   <div id="gameover-screen" class="overlay hidden">
     <div class="panel">
       <h1 class="gameover-title">Sopraffatto</h1>
@@ -168,6 +129,50 @@
 
   <div id="pause-hint" class="pause-hint hidden">U: Potenzia casa · Spazio: Attacca · F: Spara · Shift: Scatto · 1-7: Scegli esplosivo · G: Lancia</div>
 </div>
+</div>
+
+<!-- Deliberately OUTSIDE #game-container: that box is CSS-scaled down to fit
+     the screen (sometimes a lot, on a phone), which would shrink this menu's
+     text along with it. Living outside means it can go position:fixed at
+     full, real device size on touch — see style.css — so all the upgrades
+     and weapons stay readable instead of scaling down with the game field. -->
+<div id="upgrade-screen" class="overlay hidden">
+  <div class="panel">
+    <h2 id="upgrade-title">Potenzia casa</h2>
+    <p id="upgrade-subtitle" class="tagline"></p>
+
+    <h3 class="section-title first">Potenziamenti casa</h3>
+    <div id="upgrade-list" class="upgrade-list"></div>
+
+    <h3 class="section-title">Armi da mischia</h3>
+    <div id="melee-weapon-list" class="upgrade-list weapon-list"></div>
+
+    <div id="melee-weapon-upgrades-section" class="hidden">
+      <h3 class="section-title">Potenzia arma da mischia</h3>
+      <div id="melee-weapon-upgrades" class="upgrade-list weapon-list"></div>
+    </div>
+
+    <h3 class="section-title">Armi a distanza</h3>
+    <div id="ranged-weapon-list" class="upgrade-list weapon-list"></div>
+
+    <div id="ranged-weapon-upgrades-section" class="hidden">
+      <h3 class="section-title">Potenzia arma a distanza</h3>
+      <div id="ranged-weapon-upgrades" class="upgrade-list weapon-list"></div>
+    </div>
+
+    <div id="ammo-shop-section" class="hidden">
+      <h3 class="section-title">Munizioni</h3>
+      <div id="ammo-shop" class="upgrade-list weapon-list"></div>
+    </div>
+
+    <h3 class="section-title">Esplosivi</h3>
+    <div id="bomb-shop" class="upgrade-list weapon-list"></div>
+
+    <div class="upgrade-footer">
+      <div id="upgrade-money" class="money-label">€ 0</div>
+      <button id="upgrade-continue-btn" class="btn-primary">Continua</button>
+    </div>
+  </div>
 </div>
 
 <script src="script.js"></script>
