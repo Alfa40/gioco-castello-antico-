@@ -1196,10 +1196,29 @@ class Enemy {
     }
   }
 
+  // Slow, aimless wandering used by any behavior below once the player is
+  // beyond its detectRange, so an "undetected" enemy looks alive instead of
+  // frozen in place, without revealing where the player actually is. The
+  // driveby car ignores detectRange entirely (see updateDriveby) and the
+  // erratic behavior already has its own near-identical far-away wander
+  // built in (see moveTowardBehavior), so neither calls this.
+  wanderRandomly(dt) {
+    this.erraticTimer -= dt;
+    if (this.erraticTimer <= 0) {
+      this.erraticTimer = rand(0.6, 1.4);
+      const a = rand(0, Math.PI * 2);
+      this.moveDir = { x: Math.cos(a), y: Math.sin(a) };
+    }
+    this.x += this.moveDir.x * this.stats.speed * 0.4 * dt;
+    this.y += this.moveDir.y * this.stats.speed * 0.4 * dt;
+    this.isMoving = true;
+    this.facing = Math.atan2(this.moveDir.y, this.moveDir.x);
+  }
+
   // Kites to stay near its preferred range instead of closing to melee, and
   // fires a projectile at the player whenever it's within firing range.
   updateRanged(dt, player, game, d) {
-    if (d > this.stats.detectRange) return; // hasn't noticed the player yet
+    if (d > this.stats.detectRange) { this.wanderRandomly(dt); return; } // hasn't noticed the player yet
 
     const pref = this.type.preferredRange;
     let dx = player.x - this.x, dy = player.y - this.y;
@@ -1269,7 +1288,7 @@ class Enemy {
       return;
     }
 
-    if (d > this.stats.detectRange) return;
+    if (d > this.stats.detectRange) { this.wanderRandomly(dt); return; }
 
     let dx = player.x - this.x;
     let dy = player.y - this.y;
