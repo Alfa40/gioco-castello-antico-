@@ -899,6 +899,16 @@ class Player {
     }
   }
 
+  // Touch-only hands-free melee: the touch attack button was replaced by the
+  // aim stick (see index.html/bindAimStick), so on touch devices melee fires
+  // on its own whenever an enemy is within range, mirroring how ranged
+  // auto-fire already works. Keyboard/gamepad melee stays manual (Space/Cross).
+  autoMeleeAttack(game) {
+    if (this.attackCooldownTimer > 0) return;
+    const inRange = game.enemies.some(e => !e.dead && dist(this.x, this.y, e.x, e.y) <= this.melee.range + e.radius);
+    if (inRange) this.tryAttack(game);
+  }
+
   // Manual trigger (F key / R2): fires along the current aim even if nothing
   // is lined up, snapping onto a nearby enemy within a narrow cone if there is one.
   tryRangedAttack(game) {
@@ -980,10 +990,11 @@ class Player {
     this.isMoving = moving;
     this.walkPhase = moving ? this.walkPhase + dt * 10 : 0;
 
-    // Right stick (if tilted) aims independently of movement; otherwise the
-    // aim just follows facing, which keeps keyboard-only play unchanged.
-    const gpAim = input.gpAim;
-    this.aimAngle = gpAim ? Math.atan2(gpAim.y, gpAim.x) : this.facing;
+    // Right stick (gamepad) or aim stick (touch), if tilted, aims
+    // independently of movement; otherwise the aim just follows facing,
+    // which keeps keyboard-only play unchanged.
+    const stickAim = input.gpAim || input.touchAim;
+    this.aimAngle = stickAim ? Math.atan2(stickAim.y, stickAim.x) : this.facing;
 
     if (this.dashTimer > 0) {
       this.dashTimer -= dt;
@@ -1453,9 +1464,12 @@ class InputHandler {
 
     // Touch controls (see Game.bindTouchControls): mutated directly from the
     // joystick/button DOM handlers, polled the same way as gamepad state.
+    // There's no touch equivalent of gpAttack or gpRanged — melee is fully
+    // automatic (see Player.autoMeleeAttack) and so is ranged fire whenever
+    // the aim rests on a target (see Player.autoFireRanged); the right stick
+    // only aims, to avoid a redundant manual-fire button on top of that.
     this.touchMove = { up: false, down: false, left: false, right: false };
-    this.touchAttack = false;
-    this.touchRanged = false;
+    this.touchAim = null; // { x, y } unit vector from the aim stick, or null when centered
     this.touchDash = false;
 
     window.addEventListener("gamepadconnected", () => this.onGamepadStatusChange());
@@ -1673,6 +1687,7 @@ class Game {
 
   detectTouchDevice() {
     const isTouch = "ontouchstart" in window || navigator.maxTouchPoints > 0;
+    this.isTouchDevice = isTouch;
     if (isTouch) document.documentElement.classList.add("touch-device");
   }
 
@@ -1727,8 +1742,6 @@ class Game {
       el.addEventListener("touchend", end, { passive: false });
       el.addEventListener("touchcancel", end, { passive: false });
     };
-    holdButton("touch-attack", "touchAttack");
-    holdButton("touch-fire", "touchRanged");
     holdButton("touch-dash", "touchDash");
 
     document.getElementById("touch-bomb-throw").addEventListener("touchstart", e => {
@@ -1745,6 +1758,7 @@ class Game {
     }, { passive: false });
 
     this.bindJoystick();
+    this.bindAimStick();
   }
 
   bindJoystick() {
@@ -1780,6 +1794,60 @@ class Game {
       touchId = null;
       knob.style.transform = "translate(0, 0)";
       this.input.touchMove = { up: false, down: false, left: false, right: false };
+    };
+
+    base.addEventListener("touchstart", e => {
+      e.preventDefault();
+      const t = e.changedTouches[0];
+      touchId = t.identifier;
+      update(t.clientX, t.clientY);
+    }, { passive: false });
+    base.addEventListener("touchmove", e => {
+      e.preventDefault();
+      for (const t of e.changedTouches) if (t.identifier === touchId) update(t.clientX, t.clientY);
+    }, { passive: false });
+    const onEnd = e => {
+      e.preventDefault();
+      for (const t of e.changedTouches) if (t.identifier === touchId) reset();
+    };
+    base.addEventListener("touchend", onEnd, { passive: false });
+    base.addEventListener("touchcancel", onEnd, { passive: false });
+  }
+
+  // Right-hand stick: sets input.touchAim, read the same way as the
+  // gamepad's right stick (see Player.update) — direction only (magnitude is
+  // just how far the knob is dragged, not an aim-speed), independent of the
+  // movement joystick, so ranged auto-fire can be pointed anywhere regardless
+  // of where the player walks. There's no touch manual-fire button (removed
+  // to avoid confusion alongside auto-fire) — keyboard/gamepad still have one.
+  bindAimStick() {
+    const base = document.getElementById("aim-stick-base");
+    const knob = document.getElementById("aim-stick-knob");
+    const knobTravel = 74;
+    let touchId = null;
+
+    const update = (clientX, clientY) => {
+      const rect = base.getBoundingClientRect();
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      const realMaxRadius = rect.width / 2;
+      let dx = clientX - cx, dy = clientY - cy;
+      if (this.portraitRotated) {
+        [dx, dy] = [dy, -dx];
+      }
+      const mag = Math.hypot(dx, dy) || 1;
+      const clampedFrac = Math.min(mag, realMaxRadius) / realMaxRadius;
+      const fx = (dx / mag) * clampedFrac;
+      const fy = (dy / mag) * clampedFrac;
+      knob.style.transform = `translate(${fx * knobTravel}px, ${fy * knobTravel}px)`;
+
+      const knobMag = Math.hypot(fx, fy);
+      this.input.touchAim = knobMag < 0.2 ? null : { x: fx / knobMag, y: fy / knobMag };
+    };
+    const reset = () => {
+      touchId = null;
+      knob.style.transform = "translate(0, 0)";
+      this.input.touchAim = null;
     };
 
     base.addEventListener("touchstart", e => {
@@ -2405,8 +2473,6 @@ class Game {
     } else {
       rangedIndicator.classList.add("hidden");
     }
-    document.getElementById("touch-fire").classList.toggle("hidden", !this.player.ranged);
-
     const bombType = THROWABLES[this.player.selectedThrowable];
     const bombCount = this.run.bombs[bombType.id] || 0;
     document.getElementById("bomb-label").textContent = `${bombType.name} x${bombCount}`;
@@ -2418,13 +2484,19 @@ class Game {
     this.player.update(dt, this.input);
     // Attack/shoot/dash are held down rather than edge-triggered (there's no
     // "keydown" equivalent for a polled gamepad); their own cooldowns already
-    // throttle this the same way holding a keyboard key would.
-    if (this.input.gpAttack || this.input.touchAttack) this.player.tryAttack(this);
-    if (this.input.gpRanged || this.input.touchRanged) this.player.tryRangedAttack(this);
+    // throttle this the same way holding a keyboard key would. Melee and
+    // manual ranged fire have no touch equivalent — see the auto-melee call
+    // and autoFireRanged below instead.
+    if (this.input.gpAttack) this.player.tryAttack(this);
+    if (this.input.gpRanged) this.player.tryRangedAttack(this);
     if (this.input.gpDash || this.input.touchDash) this.player.tryDash();
     // Hands-free shooting: fires on its own whenever the aim rests on an
     // enemy, on top of (not instead of) the manual F/R2 trigger above.
     this.player.autoFireRanged(this);
+    // Touch has no attack button (see autoMeleeAttack) — melee triggers on
+    // its own whenever an enemy is in range, so the freed-up thumb can aim
+    // instead. Keyboard/gamepad melee stays the manual gpAttack/Space above.
+    if (this.isTouchDevice) this.player.autoMeleeAttack(this);
 
     if (this.enemiesToSpawn > 0) {
       this.spawnTimer -= dt;
