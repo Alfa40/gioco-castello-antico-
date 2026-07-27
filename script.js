@@ -28,7 +28,7 @@ const CONFIG = {
     attackCooldown: 1.15,
     detectRange: 520,
     radius: 14,
-    baseMoneyDrop: [10, 18],
+    baseMoneyDrop: [20, 36], // doubled from [10, 18]
   },
 
   // Pickups dropped by defeated enemies — the run has no progress carried
@@ -187,8 +187,8 @@ const UPGRADES = [
     desc: "Aumenta i punti vita massimi.",
     baseCost: 50,
     growth: 1.42,
-    maxLevel: 10,
-    perLevel: 14, // + max hp
+    maxLevel: 15,
+    perLevel: 500 / 15, // + max hp — 15 levels reach exactly 1000 total (500 base + 500)
   },
   {
     id: "safe",
@@ -2118,6 +2118,13 @@ class Game {
             this.run.upgrades[upg.id] = level + 1;
             this.run.playerLevel++;
             this.player.refreshLoadout(this.run);
+            if (upg.id === "firstaid") {
+              // Buying more max HP also tops the player up to at least 3/4 of
+              // the new max, instead of just preserving whatever HP was
+              // missing before the purchase (refreshLoadout's default) —
+              // never reduces current HP if it's already higher than that.
+              this.player.hp = Math.max(this.player.hp, Math.round(this.player.maxHp * 0.75));
+            }
             this.renderUpgradeList();
             this.updateHUDStatic();
           }
