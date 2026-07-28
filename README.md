@@ -48,14 +48,14 @@ Su telefono sia l'attacco in mischia (colpisce tutto ciò che è a portata intor
 
 ## Multiplayer (co-op online)
 
-Due giocatori possono giocare **la stessa partita insieme**, in tempo reale, condividendo soldi e potenziamenti nella stessa "casa". Funziona così:
+Fino a **quattro giocatori** possono giocare **la stessa partita insieme**, in tempo reale, condividendo soldi e potenziamenti nella stessa "casa". Funziona così:
 
-- Uno dei due fa da **host**: gira davvero la simulazione di gioco (nemici, danni, economia) per entrambi i personaggi, esattamente come farebbe in singolo.
-- L'altro si **unisce con un codice** e diventa **ospite**: il suo browser non calcola nulla della partita, invia solo i propri comandi (movimento, mira, attacco, scatto, esplosivi) e riceve dall'host lo stato aggiornato del campo da disegnare a schermo.
-- I nemici prendono di mira automaticamente chiunque dei due sia più vicino; entrambi condividono soldi, potenziamenti casa e armi acquistate (l'ospite non gestisce direttamente il negozio: solo l'host può aprire pausa/potenzia casa, l'ospite in quel momento vede semplicemente "in attesa").
-- Se l'ospite si disconnette la partita dell'host continua in singolo senza interruzioni; se è l'host a disconnettersi, la sessione dell'ospite termina (non avendo mai calcolato nulla in locale) e torna al menu.
+- Uno dei quattro fa da **host**: gira davvero la simulazione di gioco (nemici, danni, economia) per tutti i personaggi, esattamente come farebbe in singolo.
+- Gli altri (fino a tre) si **uniscono con un codice** e diventano **ospiti**: il loro browser non calcola nulla della partita, invia solo i propri comandi (movimento, mira, attacco, scatto, esplosivi) e riceve dall'host lo stato aggiornato del campo da disegnare a schermo.
+- I nemici prendono di mira automaticamente chiunque tra i giocatori attivi sia più vicino; tutti condividono soldi, potenziamenti casa e armi acquistate (gli ospiti non gestiscono direttamente il negozio: solo l'host può aprire pausa/potenzia casa, gli ospiti in quel momento vedono semplicemente "in attesa").
+- Se un ospite si disconnette la partita continua senza interruzioni per tutti gli altri; se è l'host a disconnettersi, la sessione di ogni ospite termina (non avendo mai calcolato nulla in locale) e torna al menu.
 
-**Requisito importante:** questa modalità richiede un piccolo server Node in esecuzione — non funziona aprendo semplicemente `index.html` da un hosting statico come GitHub Pages, perché serve un endpoint WebSocket per far incontrare i due giocatori. Il server (`server.js`) non contiene alcuna logica di gioco: fa solo da "centralino" che smista i messaggi tra i due browser (il file system statico del gioco viene comunque servito dallo stesso processo, per comodità).
+**Requisito importante:** questa modalità richiede un piccolo server Node in esecuzione — non funziona aprendo semplicemente `index.html` da un hosting statico come GitHub Pages, perché serve un endpoint WebSocket per far incontrare i giocatori. Il server (`server.js`) non contiene alcuna logica di gioco: fa solo da "centralino" che smista i messaggi tra i browser connessi alla stessa stanza (il file system statico del gioco viene comunque servito dallo stesso processo, per comodità).
 
 Per avviarlo:
 
@@ -64,13 +64,13 @@ npm install
 npm start
 ```
 
-Poi apri `http://localhost:8080` (o l'indirizzo/porta del server, se ospitato altrove) nei due browser che vogliono giocare insieme:
+Poi apri `http://localhost:8080` (o l'indirizzo/porta del server, se ospitato altrove) nei browser che vogliono giocare insieme:
 
 1. Il primo giocatore preme **Crea stanza** nella sezione "Multiplayer (co-op)" della schermata iniziale: ottiene un codice a 4 cifre da condividere.
-2. Il secondo giocatore inserisce quel codice e preme **Unisciti**.
-3. Una volta connessi, l'host preme **Entra nel quartiere** (o **Continua partita**) come al solito: la partita inizia per entrambi.
+2. Gli altri (fino a tre) inseriscono quel codice e premono **Unisciti**.
+3. Una volta connessi, l'host preme **Entra nel quartiere** (o **Continua partita**) come al solito: la partita inizia per tutti.
 
-Ci si può unire anche a partita già iniziata (l'host può creare la stanza e giocare da solo finché l'altro non si collega). La sincronizzazione avviene circa 20 volte al secondo: su una connessione con latenza alta il movimento dell'altro giocatore può risultare leggermente meno fluido del proprio, essendo un aggiornamento periodico e non un movimento predetto localmente.
+Ci si può unire anche a partita già iniziata (l'host può creare la stanza e giocare da solo finché gli altri non si collegano, uno alla volta, fino al limite di 4). La sincronizzazione avviene circa 20 volte al secondo: su una connessione con latenza alta il movimento degli altri giocatori può risultare leggermente meno fluido del proprio, essendo un aggiornamento periodico e non un movimento predetto localmente.
 
 ## Il loop di gioco
 
