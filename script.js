@@ -1585,7 +1585,8 @@ class NetworkManager {
     this.ws = null;
     this.role = null; // null | "host" | "guest"
     this.roomCode = null;
-    this.peerConnected = false;
+    this.myId = null; // server-assigned id, unique per connected socket (host included)
+    this.hostId = null; // the room's host id — always known once created/joined, ourselves if we are the host
     this.onStatusChange = null; // () => void, hooked up by the UI
   }
 
@@ -1610,11 +1611,19 @@ class NetworkManager {
       ws.onclose = () => {
         const wasGuest = this.role === "guest";
         const wasMultiplayer = this.isMultiplayer;
-        this.peerConnected = false;
         this.role = null;
         this.roomCode = null;
-        if (wasMultiplayer) this.game.onNetworkClosed(wasGuest);
-        this.notify();
+        this.myId = null;
+        this.hostId = null;
+        // Only notify the UI when we were actually in an established room:
+        // a close that follows a failed *initial* connection attempt (role
+        // never got assigned) is already handled by the connect() promise
+        // rejecting into the button's own catch — calling notify() here too
+        // would race it and immediately blank out that error message.
+        if (wasMultiplayer) {
+          this.game.onNetworkClosed(wasGuest);
+          this.notify();
+        }
       };
       ws.onmessage = e => this.handleMessage(e.data);
     });
@@ -1643,11 +1652,15 @@ class NetworkManager {
       case "created":
         this.role = "host";
         this.roomCode = msg.code;
+        this.myId = msg.id;
+        this.hostId = msg.id; // we are the host
         this.notify();
         break;
       case "joined":
         this.role = "guest";
         this.roomCode = msg.code;
+        this.myId = msg.id;
+        this.hostId = msg.hostId; // lets us tell "the host left" apart from "some other guest left"
         this.notify();
         // Tell the host what kind of input device we are, so it can decide
         // whether to run auto-melee for our character (see Player.autoMeleeAttack).
@@ -1660,14 +1673,15 @@ class NetworkManager {
         this.game.onRemoteHello(msg);
         break;
       case "peer-joined":
-        this.peerConnected = true;
+        // Order matters: onPeerJoined() actually adds the entry to
+        // this.game.remotePlayers, which the status UI reads the size of —
+        // notifying first would show a stale, one-behind player count.
+        this.game.onPeerJoined(msg.id);
         this.notify();
-        this.game.onPeerJoined();
         break;
       case "peer-left":
-        this.peerConnected = false;
+        this.game.onPeerLeft(msg.id);
         this.notify();
-        this.game.onPeerLeft();
         break;
       case "state":
         this.game.applyRemoteState(msg);
@@ -1685,7 +1699,8 @@ class NetworkManager {
     if (this.ws) { try { this.ws.close(); } catch (e) {} this.ws = null; }
     this.role = null;
     this.roomCode = null;
-    this.peerConnected = false;
+    this.myId = null;
+    this.hostId = null;
   }
 }
 
@@ -1698,9 +1713,11 @@ class Game {
     this.ctx = this.canvas.getContext("2d");
 
     this.network = new NetworkManager(this);
-    this.remotePlayer = null; // second Player instance, host-side only, driven by the guest's input
-    this.remoteInput = new RemoteInputState();
-    this.remoteIsTouchDevice = false;
+    // Host-side only: one entry per connected peer (up to 3, for up to 4
+    // players total), keyed by that peer's server-assigned id — see
+    // onPeerJoined/onPeerLeft and applyRemoteState/applyRemoteAction.
+    this.remotePlayers = new Map(); // id -> { player: Player, input: RemoteInputState, isTouchDevice: bool }
+    this._pendingTouchFlags = new Map(); // id -> bool, for a "hello" that arrives just before its "peer-joined"
     this._snapshotTimer = 0;
     this._stateSendTimer = 0;
     this.renderState = null; // guest-only: last snapshot, reconstructed into draw()-able objects
@@ -1832,12 +1849,7 @@ class Game {
     if (saved.playerHp != null) this.player.hp = clamp(saved.playerHp, 1, this.player.maxHp);
     this.player.x = CONFIG.width / 2;
     this.player.y = CONFIG.height / 2;
-    if (this.remotePlayer) {
-      this.remotePlayer.refreshLoadout(this.run);
-      this.remotePlayer.resetForRun();
-      this.remotePlayer.x = CONFIG.width / 2 + 40;
-      this.remotePlayer.y = CONFIG.height / 2;
-    }
+    this.repositionRemotePlayers();
     this.enemies = [];
     this.projectiles = [];
     this.pickups = [];
@@ -2068,11 +2080,12 @@ class Game {
       idleRow.classList.add("hidden");
       leaveBtn.classList.remove("hidden");
       if (net.isHost) {
+        const count = this.remotePlayers.size + 1; // +1 for the host itself
         setStatus(
-          net.peerConnected
-            ? `Stanza ${net.roomCode} — secondo giocatore connesso!`
-            : `Stanza ${net.roomCode} — condividi il codice, in attesa di un secondo giocatore...`,
-          net.peerConnected ? "mp-ok" : null
+          count > 1
+            ? `Stanza ${net.roomCode} — ${count}/4 giocatori connessi, condividi il codice per farne entrare altri`
+            : `Stanza ${net.roomCode} — condividi il codice, in attesa di altri giocatori (fino a 4 in totale)...`,
+          count > 1 ? "mp-ok" : null
         );
       } else if (net.isGuest) {
         setStatus(`Connesso alla stanza ${net.roomCode}. In attesa dell'host...`, "mp-ok");
@@ -2097,7 +2110,7 @@ class Game {
     leaveBtn.addEventListener("click", () => {
       const wasGuest = this.network.isGuest;
       this.network.disconnect();
-      this.remotePlayer = null;
+      this.remotePlayers.clear();
       this.renderState = null;
       document.getElementById("mp-wait-overlay").classList.add("hidden");
       this.network.onStatusChange();
@@ -2122,34 +2135,52 @@ class Game {
     statusEl.textContent = reason === "full" ? "Quella stanza è già piena." : "Codice stanza non valido.";
   }
 
+  // A peer just paired into our room. On the guest side this message just
+  // means "some *other* guest joined too" — irrelevant to us, we only ever
+  // talk to the host — so this stays a no-op there.
+  //
+  // Host-side, hot-add a Player for them, spread out around the host's
+  // spawn point; this can happen before a run has even started (menu) or
+  // mid-run either way. Nothing else needs to change since enemy
+  // targeting/collision/game-over already iterate over activePlayers.
+  onPeerJoined(id) {
+    if (!this.network.isHost || this.remotePlayers.has(id)) return;
+    const off = this.spawnOffsetFor(this.remotePlayers.size + 1);
+    const player = new Player(CONFIG.width / 2 + off.x, CONFIG.height / 2 + off.y);
+    player.refreshLoadout(this.run);
+    player.resetForRun();
+    const isTouchDevice = this._pendingTouchFlags.get(id) || false;
+    this._pendingTouchFlags.delete(id);
+    this.remotePlayers.set(id, { player, input: new RemoteInputState(), isTouchDevice });
+  }
+
   // The guest tells us (the host) whether it's a touch device right after
   // joining, so we know whether to run auto-melee for its character too —
   // see Player.autoMeleeAttack and the isTouchDevice-gated call in update().
+  // Stashed in _pendingTouchFlags if it beats the matching "peer-joined"
+  // there (the server sends peer-joined first, but message arrival order
+  // across two different sockets is never strictly guaranteed).
   onRemoteHello(msg) {
-    this.remoteIsTouchDevice = !!msg.isTouchDevice;
+    const entry = this.remotePlayers.get(msg.from);
+    if (entry) entry.isTouchDevice = !!msg.isTouchDevice;
+    else this._pendingTouchFlags.set(msg.from, !!msg.isTouchDevice);
   }
 
-  // Host-side: a peer just paired into our room. This can happen before a
-  // run has even started (menu) or mid-run — either way just hot-add a
-  // second Player sharing our loadout; nothing else needs to change since
-  // enemy targeting/collision already iterate over activePlayers.
-  onPeerJoined() {
-    if (!this.network.isHost) return;
-    this.remotePlayer = new Player(CONFIG.width / 2 + 40, CONFIG.height / 2);
-    this.remotePlayer.refreshLoadout(this.run);
-    this.remotePlayer.resetForRun();
-  }
-
-  onPeerLeft() {
+  onPeerLeft(id) {
     if (this.network.isHost) {
-      // The guest dropped out — solo play continues uninterrupted.
-      this.remotePlayer = null;
+      // That one player dropped out — everyone else's game continues uninterrupted.
+      this.remotePlayers.delete(id);
+      this._pendingTouchFlags.delete(id);
       return;
     }
-    // We're the guest and the host disconnected: there's no local
-    // simulation to fall back on, so head back to the menu.
+    // We're a guest. With up to 4 players in a room, a "peer-left" can be
+    // about any *other* guest leaving — none of our business, since we only
+    // ever talk to the host. Only react if it's specifically the host that
+    // disconnected, since that's the one peer we actually depend on: there's
+    // no local simulation to fall back on, so head back to the menu.
+    if (id !== this.network.hostId) return;
     this.network.disconnect();
-    this.remotePlayer = null;
+    this.remotePlayers.clear();
     this.renderState = null;
     document.getElementById("mp-wait-overlay").classList.add("hidden");
     this.setState("menu");
@@ -2160,18 +2191,48 @@ class Game {
   // session is gone since it never ran its own simulation; a host just
   // loses its networking and can keep playing solo.
   onNetworkClosed(wasGuest) {
-    this.remotePlayer = null;
+    this.remotePlayers.clear();
+    this._pendingTouchFlags.clear();
     this.renderState = null;
     document.getElementById("mp-wait-overlay").classList.add("hidden");
     if (wasGuest) this.setState("menu");
   }
 
-  // Every living player (host's own + the guest's, when present) — used by
+  // Spawn offset (relative to field center) for the Nth player to join a
+  // room, host included — a small cross formation so up to 4 players don't
+  // stack on top of each other. Index 0 (the host) is always dead center.
+  spawnOffsetFor(index) {
+    const offsets = [{ x: 0, y: 0 }, { x: 60, y: 0 }, { x: -60, y: 0 }, { x: 0, y: 60 }];
+    return offsets[index % offsets.length];
+  }
+
+  // Applies the current run's upgrades/weapons to every connected player —
+  // shared by every shop purchase handler below.
+  refreshAllLoadouts() {
+    this.player.refreshLoadout(this.run);
+    for (const entry of this.remotePlayers.values()) entry.player.refreshLoadout(this.run);
+  }
+
+  // Refreshes loadout and re-spawns every currently-connected remote player
+  // around the host's spawn point — shared by startRun()/resumeRun().
+  repositionRemotePlayers() {
+    let i = 1;
+    for (const entry of this.remotePlayers.values()) {
+      const off = this.spawnOffsetFor(i++);
+      entry.player.refreshLoadout(this.run);
+      entry.player.resetForRun();
+      entry.player.x = CONFIG.width / 2 + off.x;
+      entry.player.y = CONFIG.height / 2 + off.y;
+    }
+  }
+
+  // Every living player (host's own + every connected guest's) — used by
   // enemy targeting, projectile/pickup collision and the game-over check so
-  // none of that logic needs to know whether we're actually in multiplayer.
+  // none of that logic needs to know whether we're actually in multiplayer,
+  // let alone how many players are in the room.
   get activePlayers() {
     const list = [this.player];
-    if (this.remotePlayer) list.push(this.remotePlayer);
+    for (const entry of this.remotePlayers.values()) list.push(entry.player);
     return list.filter(p => p.hp > 0);
   }
 
@@ -2188,33 +2249,38 @@ class Game {
   }
 
   // Guest -> host: continuous movement/aim state, sent at a throttled rate
-  // (see update()). Applied straight into the RemoteInputState that drives
-  // this.remotePlayer.update() every host frame.
+  // (see update()). Applied straight into the sender's RemoteInputState,
+  // identified by msg.from — see the entry.player.update() call in update().
   applyRemoteState(msg) {
     if (!this.network.isHost) return;
-    this.remoteInput.moveState = msg.move || { up: false, down: false, left: false, right: false };
-    this.remoteInput.aim = msg.aim || null;
+    const entry = this.remotePlayers.get(msg.from);
+    if (!entry) return;
+    entry.input.moveState = msg.move || { up: false, down: false, left: false, right: false };
+    entry.input.aim = msg.aim || null;
   }
 
   // Guest -> host: discrete one-shot actions (mirrors the local keyboard's
   // edge-triggered onAttack/onDash/etc. — one message per press, cooldowns
   // inside tryAttack/tryDash/etc. already make repeats harmless).
   applyRemoteAction(msg) {
-    if (!this.network.isHost || !this.remotePlayer || this.state !== "playing") return;
+    if (!this.network.isHost || this.state !== "playing") return;
+    const entry = this.remotePlayers.get(msg.from);
+    if (!entry) return;
+    const rp = entry.player;
     switch (msg.action) {
-      case "attack": this.remotePlayer.tryAttack(this); break;
-      case "rangedAttack": this.remotePlayer.tryRangedAttack(this); break;
-      case "dash": this.remotePlayer.tryDash(); break;
-      case "throwBomb": this.throwBomb(this.remotePlayer); break;
-      case "selectBomb": this.selectBomb(msg.value, msg.absolute, this.remotePlayer); break;
+      case "attack": rp.tryAttack(this); break;
+      case "rangedAttack": rp.tryRangedAttack(this); break;
+      case "dash": rp.tryDash(); break;
+      case "throwBomb": this.throwBomb(rp); break;
+      case "selectBomb": this.selectBomb(msg.value, msg.absolute, rp); break;
     }
   }
 
   // Host -> guest: a compact snapshot of everything the guest needs to
   // render (see applySnapshot). Throttled — see the call site in update().
   sendSnapshot() {
-    const serializePlayer = (p, role) => ({
-      role,
+    const serializePlayer = (p, id, isHost) => ({
+      id, isHost,
       x: p.x, y: p.y, facing: p.facing, aimAngle: p.aimAngle,
       radius: p.radius, hp: p.hp, maxHp: p.maxHp,
       meleeId: p.melee && p.melee.id, meleeName: p.melee && p.melee.name,
@@ -2224,8 +2290,8 @@ class Game {
       attackActiveTimer: p.attackActiveTimer, isInvulnerable: p.isInvulnerable,
       meleeRange: p.melee && p.melee.range,
     });
-    const players = [serializePlayer(this.player, "host")];
-    if (this.remotePlayer) players.push(serializePlayer(this.remotePlayer, "guest"));
+    const players = [serializePlayer(this.player, this.network.myId, true)];
+    for (const [id, entry] of this.remotePlayers) players.push(serializePlayer(entry.player, id, false));
 
     const state = {
       gameState: this.state,
@@ -2294,15 +2360,15 @@ class Game {
       attackActiveTimer: p.attackActiveTimer, invulnTimer: p.isInvulnerable ? 1 : 0,
     });
 
-    const me = state.players.find(p => p.role === "guest");
-    const other = state.players.find(p => p.role === "host");
+    const me = state.players.find(p => p.id === this.network.myId);
+    const others = state.players.filter(p => p.id !== this.network.myId);
     this.renderState = {
       gameState: state.gameState,
       zone: state.zone, zoneName: state.zoneName,
       waveTotal: state.waveTotal, waveDefeated: state.waveDefeated, money: state.money,
       finalZone: state.finalZone, finalMoney: state.finalMoney,
       me: me ? mkPlayer(me) : null,
-      other: other ? mkPlayer(other) : null,
+      others: others.map(mkPlayer),
       enemies: state.enemies.map(mkEnemy),
       projectiles: state.projectiles.map(mkProjectile),
       pickups: state.pickups.map(mkPickup),
@@ -2388,12 +2454,7 @@ class Game {
     this.player.resetForRun();
     this.player.x = CONFIG.width / 2;
     this.player.y = CONFIG.height / 2;
-    if (this.remotePlayer) {
-      this.remotePlayer.refreshLoadout(this.run);
-      this.remotePlayer.resetForRun();
-      this.remotePlayer.x = CONFIG.width / 2 + 40;
-      this.remotePlayer.y = CONFIG.height / 2;
-    }
+    this.repositionRemotePlayers();
     this.zone = 1;
     this.moneyThisRun = 0;
     this.enemies = [];
@@ -2408,7 +2469,7 @@ class Game {
 
   startZone() {
     this.player.healOnNewZone();
-    if (this.remotePlayer) this.remotePlayer.healOnNewZone();
+    for (const entry of this.remotePlayers.values()) entry.player.healOnNewZone();
     const count = Math.min(
       CONFIG.waves.baseEnemies + (this.zone - 1) * CONFIG.waves.perZone,
       CONFIG.waves.maxEnemies
@@ -2463,9 +2524,9 @@ class Game {
 
   // value/absolute: keyboard digit keys pass (index, true) to jump straight
   // to a slot; the gamepad's L1 passes (1, false) to cycle forward by one.
-  // `actor` defaults to the local player but is passed explicitly as
-  // this.remotePlayer when applying a guest's action in multiplayer, since
-  // the selected slot is tracked per-player, not per-run.
+  // `actor` defaults to the local player but is passed explicitly as one of
+  // the entries in this.remotePlayers when applying a guest's action in
+  // multiplayer, since the selected slot is tracked per-player, not per-run.
   selectBomb(value, absolute, actor = this.player) {
     const n = THROWABLES.length;
     actor.selectedThrowable = absolute ? value % n : (actor.selectedThrowable + value + n) % n;
@@ -2685,15 +2746,16 @@ class Game {
             this.run.money -= cost;
             this.run.upgrades[upg.id] = level + 1;
             this.run.playerLevel++;
-            this.player.refreshLoadout(this.run);
-            if (this.remotePlayer) this.remotePlayer.refreshLoadout(this.run);
+            this.refreshAllLoadouts();
             if (upg.id === "firstaid") {
-              // Buying more max HP also tops the player up to at least 3/4 of
-              // the new max, instead of just preserving whatever HP was
+              // Buying more max HP also tops every player up to at least 3/4
+              // of the new max, instead of just preserving whatever HP was
               // missing before the purchase (refreshLoadout's default) —
               // never reduces current HP if it's already higher than that.
               this.player.hp = Math.max(this.player.hp, Math.round(this.player.maxHp * 0.75));
-              if (this.remotePlayer) this.remotePlayer.hp = Math.max(this.remotePlayer.hp, Math.round(this.remotePlayer.maxHp * 0.75));
+              for (const entry of this.remotePlayers.values()) {
+                entry.player.hp = Math.max(entry.player.hp, Math.round(entry.player.maxHp * 0.75));
+              }
             }
             this.renderUpgradeList();
             this.updateHUDStatic();
@@ -2788,8 +2850,7 @@ class Game {
     this.run.money -= weapon.cost;
     this.run.meleeTier = idx;
     this.run.playerLevel++;
-    this.player.refreshLoadout(this.run);
-    if (this.remotePlayer) this.remotePlayer.refreshLoadout(this.run);
+    this.refreshAllLoadouts();
     this.openUpgradeMenu(this.menuMode);
     this.updateHUDStatic();
   }
@@ -2805,8 +2866,7 @@ class Game {
     this.run.money -= weapon.cost;
     this.run.rangedTier = idx;
     this.run.playerLevel++;
-    this.player.refreshLoadout(this.run);
-    if (this.remotePlayer) this.remotePlayer.refreshLoadout(this.run);
+    this.refreshAllLoadouts();
     this.openUpgradeMenu(this.menuMode);
     this.updateHUDStatic();
   }
@@ -2816,8 +2876,7 @@ class Game {
     this.run.money -= cost;
     this.run.meleeWeaponUpgrades.push(id);
     this.run.playerLevel++;
-    this.player.refreshLoadout(this.run);
-    if (this.remotePlayer) this.remotePlayer.refreshLoadout(this.run);
+    this.refreshAllLoadouts();
     this.openUpgradeMenu(this.menuMode);
     this.updateHUDStatic();
   }
@@ -2827,8 +2886,7 @@ class Game {
     this.run.money -= cost;
     this.run.rangedWeaponUpgrades.push(id);
     this.run.playerLevel++;
-    this.player.refreshLoadout(this.run);
-    if (this.remotePlayer) this.remotePlayer.refreshLoadout(this.run);
+    this.refreshAllLoadouts();
     this.openUpgradeMenu(this.menuMode);
     this.updateHUDStatic();
   }
@@ -3007,7 +3065,7 @@ class Game {
     // Host -> guest snapshot broadcast. Runs regardless of this.state so a
     // connected guest still sees the pause/shop/game-over overlays, not
     // just live combat — see the early return for "playing"-only logic below.
-    if (this.network.isHost && this.network.peerConnected) {
+    if (this.network.isHost && this.remotePlayers.size > 0) {
       this._snapshotTimer -= dt;
       if (this._snapshotTimer <= 0) {
         this._snapshotTimer = 1 / 20;
@@ -3034,14 +3092,15 @@ class Game {
     // instead. Keyboard/gamepad melee stays the manual gpAttack/Space above.
     if (this.isTouchDevice) this.player.autoMeleeAttack(this);
 
-    // Host-side simulation of the guest's character: driven by the last
-    // continuous input state it sent (see applyRemoteState), with its
-    // discrete actions (attack/dash/...) applied immediately as they arrive
-    // over the socket — see applyRemoteAction.
-    if (this.remotePlayer && this.remotePlayer.hp > 0) {
-      this.remotePlayer.update(dt, this.remoteInput);
-      this.remotePlayer.autoFireRanged(this);
-      if (this.remoteIsTouchDevice) this.remotePlayer.autoMeleeAttack(this);
+    // Host-side simulation of every other connected player: each is driven
+    // by the last continuous input state it sent (see applyRemoteState),
+    // with discrete actions (attack/dash/...) applied immediately as they
+    // arrive over the socket — see applyRemoteAction.
+    for (const entry of this.remotePlayers.values()) {
+      if (entry.player.hp <= 0) continue;
+      entry.player.update(dt, entry.input);
+      entry.player.autoFireRanged(this);
+      if (entry.isTouchDevice) entry.player.autoMeleeAttack(this);
     }
 
     if (this.enemiesToSpawn > 0) {
@@ -3167,7 +3226,7 @@ class Game {
     for (const enemy of this.enemies) enemy.draw(this.ctx);
     for (const proj of this.projectiles) proj.draw(this.ctx);
     this.player.draw(this.ctx);
-    if (this.remotePlayer) this.remotePlayer.draw(this.ctx);
+    for (const entry of this.remotePlayers.values()) entry.player.draw(this.ctx);
     for (const ft of this.floatingTexts) ft.draw(this.ctx);
   }
 
@@ -3182,7 +3241,7 @@ class Game {
     for (const pickup of rs.pickups) pickup.draw(this.ctx);
     for (const enemy of rs.enemies) enemy.draw(this.ctx);
     for (const proj of rs.projectiles) proj.draw(this.ctx);
-    if (rs.other) rs.other.draw(this.ctx);
+    for (const other of rs.others) other.draw(this.ctx);
     if (rs.me) rs.me.draw(this.ctx);
     for (const ft of rs.floatingTexts) ft.draw(this.ctx);
   }

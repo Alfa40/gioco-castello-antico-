@@ -1,20 +1,24 @@
 // Crazy Town — multiplayer relay server.
 //
 // Serves the game's static files AND a WebSocket endpoint (/ws) on the same
-// port. The server holds NO game logic: it only pairs two sockets into a
-// room (via a short numeric code) and relays whatever JSON messages they
-// send each other. The host client runs the actual simulation for both
-// players; the guest client only sends input and renders snapshots — see
-// script.js's NetworkManager/Game.applySnapshot for that side of the deal.
+// port. The server holds NO game logic: it only groups up to MAX_PLAYERS
+// sockets into a room (via a short numeric code) and relays whatever JSON
+// messages they send each other, tagging each relayed message with the
+// sender's id so recipients can tell players apart. The host client runs
+// the actual simulation for every player; every other client only sends
+// input and renders snapshots — see script.js's NetworkManager/
+// Game.applySnapshot for that side of the deal.
 "use strict";
 
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const WebSocket = require("ws");
 
 const PORT = process.env.PORT || 8080;
 const ROOT = __dirname;
+const MAX_PLAYERS = 4;
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -55,7 +59,7 @@ const server = http.createServer((req, res) => {
 
 const wss = new WebSocket.Server({ server, path: "/ws" });
 
-// code -> array of up to 2 sockets ([host, guest])
+// code -> array of up to MAX_PLAYERS sockets, index 0 is always the host
 const rooms = new Map();
 
 function send(ws, obj) {
@@ -70,6 +74,10 @@ function makeRoomCode() {
   return code;
 }
 
+function makeId() {
+  return crypto.randomBytes(4).toString("hex");
+}
+
 function leaveRoom(ws) {
   if (!ws.room) return;
   const peers = rooms.get(ws.room);
@@ -79,7 +87,7 @@ function leaveRoom(ws) {
     rooms.delete(ws.room);
   } else {
     rooms.set(ws.room, remaining);
-    for (const p of remaining) send(p, { type: "peer-left" });
+    for (const p of remaining) send(p, { type: "peer-left", id: ws.id });
   }
   ws.room = null;
 }
@@ -87,6 +95,7 @@ function leaveRoom(ws) {
 wss.on("connection", ws => {
   ws.room = null;
   ws.role = null;
+  ws.id = makeId();
 
   ws.on("message", raw => {
     let msg;
@@ -101,7 +110,7 @@ wss.on("connection", ws => {
       rooms.set(code, [ws]);
       ws.room = code;
       ws.role = "host";
-      send(ws, { type: "created", code });
+      send(ws, { type: "created", code, id: ws.id });
       return;
     }
 
@@ -112,22 +121,35 @@ wss.on("connection", ws => {
         send(ws, { type: "join-error", reason: "not-found" });
         return;
       }
-      if (peers.length >= 2) {
+      if (peers.length >= MAX_PLAYERS) {
         send(ws, { type: "join-error", reason: "full" });
         return;
       }
       peers.push(ws);
       ws.room = code;
       ws.role = "guest";
-      send(ws, { type: "joined", code });
-      send(peers[0], { type: "peer-joined" });
+      // Tell the host (and any other already-connected guests) about the
+      // newcomer BEFORE confirming the join to the newcomer itself, so
+      // whoever needs to react to "peer-joined" (only the host does, in
+      // practice) has already done so by the time the newcomer could
+      // possibly send its first message (e.g. "hello").
+      for (const p of peers) {
+        if (p !== ws) send(p, { type: "peer-joined", id: ws.id });
+      }
+      // peers[0] is always the host (the socket that called "create"), so
+      // the newcomer can tell a future "peer-left" about the host apart
+      // from one about some other guest — see Game.onPeerLeft.
+      send(ws, { type: "joined", code, id: ws.id, hostId: peers[0].id });
       return;
     }
 
-    // Anything else (input, snapshot, action, hello...) is just relayed
-    // as-is to whichever other socket shares this room.
+    // Anything else (state, snapshot, action, hello...) is relayed as-is
+    // to every other socket in the room, tagged with the sender's id so
+    // recipients (mainly the host, juggling several other players) can
+    // tell who it came from.
     if (ws.room) {
       const peers = rooms.get(ws.room) || [];
+      msg.from = ws.id;
       for (const p of peers) {
         if (p !== ws) send(p, msg);
       }
