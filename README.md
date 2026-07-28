@@ -1,12 +1,12 @@
 # Crazy Town
 
-Un piccolo beat 'em up top-down giocabile nel browser, in HTML/CSS/JavaScript puro (nessuna build, nessuna dipendenza).
+Un piccolo beat 'em up top-down giocabile nel browser, in HTML/CSS/JavaScript puro (nessuna build, nessuna dipendenza), con supporto opzionale per giocare in due in co-op online.
 
 Sei un ragazzo qualunque che vive in un quartiere difficile. Ogni notte dei criminali di strada provano ad assaltarti per portarti via i tuoi soldi. Difenditi, mettili K.O. e usa i guadagni per rinforzare casa tua. Più ti addentri nel quartiere, più gli aggressori diventano numerosi, veloci e aggressivi.
 
 ## Come giocare
 
-Apri `index.html` in un browser (o servilo con un semplice server statico, es. `python3 -m http.server`), poi premi **Entra nel quartiere**.
+Apri `index.html` in un browser (o servilo con un semplice server statico, es. `python3 -m http.server`), poi premi **Entra nel quartiere**. Questo copre l'esperienza da un giocatore solo; per giocare in due vedi [Multiplayer](#multiplayer-co-op-online) qui sotto, che invece richiede il piccolo server Node incluso nel progetto.
 
 - **WASD / Frecce** — Movimento (determina anche la direzione dell'attacco in mischia)
 - **Spazio** — Attacca in mischia (colpisce i nemici a distanza ravvicinata attorno a te)
@@ -46,6 +46,32 @@ Il campo di gioco resta sempre orizzontale, senza bisogno di ruotare il telefono
 
 Su telefono sia l'attacco in mischia (colpisce tutto ciò che è a portata intorno a te, in qualsiasi direzione) che quello a distanza (quando la mira è su un nemico a portata) sono **automatici**: niente tasto pugno né tasto spara manuale, per evitare confusione con l'automatico. La levetta destra serve solo a puntare l'arma a distanza dove vuoi, e torna a seguire la direzione in cui ti muovi se la lasci al centro.
 
+## Multiplayer (co-op online)
+
+Due giocatori possono giocare **la stessa partita insieme**, in tempo reale, condividendo soldi e potenziamenti nella stessa "casa". Funziona così:
+
+- Uno dei due fa da **host**: gira davvero la simulazione di gioco (nemici, danni, economia) per entrambi i personaggi, esattamente come farebbe in singolo.
+- L'altro si **unisce con un codice** e diventa **ospite**: il suo browser non calcola nulla della partita, invia solo i propri comandi (movimento, mira, attacco, scatto, esplosivi) e riceve dall'host lo stato aggiornato del campo da disegnare a schermo.
+- I nemici prendono di mira automaticamente chiunque dei due sia più vicino; entrambi condividono soldi, potenziamenti casa e armi acquistate (l'ospite non gestisce direttamente il negozio: solo l'host può aprire pausa/potenzia casa, l'ospite in quel momento vede semplicemente "in attesa").
+- Se l'ospite si disconnette la partita dell'host continua in singolo senza interruzioni; se è l'host a disconnettersi, la sessione dell'ospite termina (non avendo mai calcolato nulla in locale) e torna al menu.
+
+**Requisito importante:** questa modalità richiede un piccolo server Node in esecuzione — non funziona aprendo semplicemente `index.html` da un hosting statico come GitHub Pages, perché serve un endpoint WebSocket per far incontrare i due giocatori. Il server (`server.js`) non contiene alcuna logica di gioco: fa solo da "centralino" che smista i messaggi tra i due browser (il file system statico del gioco viene comunque servito dallo stesso processo, per comodità).
+
+Per avviarlo:
+
+```bash
+npm install
+npm start
+```
+
+Poi apri `http://localhost:8080` (o l'indirizzo/porta del server, se ospitato altrove) nei due browser che vogliono giocare insieme:
+
+1. Il primo giocatore preme **Crea stanza** nella sezione "Multiplayer (co-op)" della schermata iniziale: ottiene un codice a 4 cifre da condividere.
+2. Il secondo giocatore inserisce quel codice e preme **Unisciti**.
+3. Una volta connessi, l'host preme **Entra nel quartiere** (o **Continua partita**) come al solito: la partita inizia per entrambi.
+
+Ci si può unire anche a partita già iniziata (l'host può creare la stanza e giocare da solo finché l'altro non si collega). La sincronizzazione avviene circa 20 volte al secondo: su una connessione con latenza alta il movimento dell'altro giocatore può risultare leggermente meno fluido del proprio, essendo un aggiornamento periodico e non un movimento predetto localmente.
+
 ## Il loop di gioco
 
 - Sconfiggi i nemici di ogni zona per guadagnare soldi.
@@ -71,4 +97,6 @@ Su telefono sia l'attacco in mischia (colpisce tutto ciò che è a portata intor
 
 - `index.html` — markup e overlay dell'interfaccia (menu, HUD, schermata potenziamenti, game over)
 - `style.css` — tema visivo
-- `script.js` — tutta la logica di gioco (player, nemici, spawn/scaling delle zone, potenziamenti, armi, pickup)
+- `script.js` — tutta la logica di gioco (player, nemici, spawn/scaling delle zone, potenziamenti, armi, pickup, multiplayer)
+- `server.js` — server Node opzionale: file statici + relay WebSocket per il multiplayer (nessuna logica di gioco)
+- `package.json` — dipendenza `ws` del server

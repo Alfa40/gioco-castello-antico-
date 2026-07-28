@@ -109,6 +109,21 @@
         Con molti soldi puoi comprare granate, molotov, bombe adesive e granate fumogene/stordenti:
         utili per fare danni pesanti o per sfuggire a un'orda che ti ha circondato.
       </p>
+      <div id="mp-section" class="mp-section">
+        <h3 class="section-title">Multiplayer (co-op)</h3>
+        <p class="desc small">
+          Gioca in due sulla stessa partita: chi crea la stanza fa da host (gira la partita vera e propria),
+          chi si unisce con il codice controlla il secondo personaggio. Richiede il server Node del gioco
+          in esecuzione (non funziona da un semplice hosting statico).
+        </p>
+        <div id="mp-idle-row" class="mp-row">
+          <button id="mp-create-btn" class="btn-secondary">Crea stanza</button>
+          <input id="mp-join-code" class="mp-code-input" type="text" inputmode="numeric" maxlength="4" placeholder="Codice">
+          <button id="mp-join-btn" class="btn-secondary">Unisciti</button>
+        </div>
+        <div id="mp-status" class="mp-status hidden"></div>
+        <button id="mp-leave-btn" class="btn-secondary hidden">Lascia la stanza</button>
+      </div>
       <div id="save-summary" class="save-summary hidden"></div>
       <button id="continue-btn" class="btn-primary hidden">Continua partita</button>
       <button id="start-btn" class="btn-primary">Entra nel quartiere</button>
@@ -123,11 +138,19 @@
         <div>Zona raggiunta: <span id="final-zone"></span></div>
         <div>Soldi guadagnati in questa run: <span id="final-money"></span> €</div>
       </div>
+      <p id="gameover-guest-note" class="desc small hidden">Solo l'host può iniziare una nuova partita.</p>
       <button id="restart-btn" class="btn-primary">Riprova</button>
     </div>
   </div>
 
   <div id="pause-hint" class="pause-hint hidden">U: Potenzia casa · Spazio: Attacca · F: Spara · Shift: Scatto · 1-7: Scegli esplosivo · G: Lancia</div>
+
+  <div id="mp-wait-overlay" class="overlay hidden">
+    <div class="panel">
+      <h2>Pausa</h2>
+      <p class="desc">L'host sta gestendo il negozio potenziamenti. Attendi...</p>
+    </div>
+  </div>
 </div>
 </div>
 
