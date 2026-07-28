@@ -1613,8 +1613,15 @@ class NetworkManager {
         this.peerConnected = false;
         this.role = null;
         this.roomCode = null;
-        if (wasMultiplayer) this.game.onNetworkClosed(wasGuest);
-        this.notify();
+        // Only notify the UI when we were actually in an established room:
+        // a close that follows a failed *initial* connection attempt (role
+        // never got assigned) is already handled by the connect() promise
+        // rejecting into the button's own catch — calling notify() here too
+        // would race it and immediately blank out that error message.
+        if (wasMultiplayer) {
+          this.game.onNetworkClosed(wasGuest);
+          this.notify();
+        }
       };
       ws.onmessage = e => this.handleMessage(e.data);
     });
