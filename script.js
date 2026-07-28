@@ -561,6 +561,12 @@ function clearRunState() {
   try { localStorage.removeItem(SAVE_KEY); } catch (e) {}
 }
 
+// Stable per-entity ids (Enemy/Projectile/Pickup/Bomb) so a multiplayer guest
+// can match the same entity across two snapshots and interpolate its motion
+// instead of teleporting it — see Game.sendSnapshot/drawFromSnapshot.
+let _nextEntityId = 1;
+function nextEntityId() { return _nextEntityId++; }
+
 /* =========================================================
    FLOATING TEXT (damage numbers, loot popups)
 ========================================================= */
@@ -596,6 +602,7 @@ class FloatingText {
 ========================================================= */
 class Projectile {
   constructor(x, y, angle, speed, damage, owner = "player", splashRadius = 0) {
+    this.id = nextEntityId();
     this.x = x;
     this.y = y;
     this.vx = Math.cos(angle) * speed;
@@ -628,6 +635,7 @@ class Projectile {
 ========================================================= */
 class Pickup {
   constructor(x, y, kind, amount) {
+    this.id = nextEntityId();
     this.x = x;
     this.y = y;
     this.kind = kind; // "health" | "ammo"
@@ -681,6 +689,7 @@ class Pickup {
 ========================================================= */
 class Bomb {
   constructor(type, x, y, stickTarget) {
+    this.id = nextEntityId();
     this.type = type;
     this.x = x;
     this.y = y;
@@ -1101,6 +1110,7 @@ class Player {
 ========================================================= */
 class Enemy {
   constructor(x, y, stats, type) {
+    this.id = nextEntityId();
     this.x = x;
     this.y = y;
     this.type = type;
@@ -1720,7 +1730,12 @@ class Game {
     this._pendingTouchFlags = new Map(); // id -> bool, for a "hello" that arrives just before its "peer-joined"
     this._snapshotTimer = 0;
     this._stateSendTimer = 0;
-    this.renderState = null; // guest-only: last snapshot, reconstructed into draw()-able objects
+    // Guest-only: raw snapshots (see applySnapshot) used to interpolate
+    // positions smoothly in drawFromSnapshot() instead of teleporting.
+    this._snapPrev = null;
+    this._snapCurr = null;
+    this._snapReceivedAt = 0;
+    this._snapInterpDuration = 1 / 100;
 
     this.input = new InputHandler();
     // In multiplayer these callbacks fork on role: the host (or a solo
@@ -2111,7 +2126,8 @@ class Game {
       const wasGuest = this.network.isGuest;
       this.network.disconnect();
       this.remotePlayers.clear();
-      this.renderState = null;
+      this._snapPrev = null;
+    this._snapCurr = null;
       document.getElementById("mp-wait-overlay").classList.add("hidden");
       this.network.onStatusChange();
       if (wasGuest) this.setState("menu");
@@ -2181,7 +2197,8 @@ class Game {
     if (id !== this.network.hostId) return;
     this.network.disconnect();
     this.remotePlayers.clear();
-    this.renderState = null;
+    this._snapPrev = null;
+    this._snapCurr = null;
     document.getElementById("mp-wait-overlay").classList.add("hidden");
     this.setState("menu");
   }
@@ -2193,7 +2210,8 @@ class Game {
   onNetworkClosed(wasGuest) {
     this.remotePlayers.clear();
     this._pendingTouchFlags.clear();
-    this.renderState = null;
+    this._snapPrev = null;
+    this._snapCurr = null;
     document.getElementById("mp-wait-overlay").classList.add("hidden");
     if (wasGuest) this.setState("menu");
   }
@@ -2304,17 +2322,17 @@ class Game {
       finalMoney: Math.max(0, this.moneyThisRun),
       players,
       enemies: this.enemies.filter(e => !e.dead).map(e => ({
-        x: e.x, y: e.y, facing: e.facing, hp: e.hp, maxHp: e.maxHp,
+        id: e.id, x: e.x, y: e.y, facing: e.facing, hp: e.hp, maxHp: e.maxHp,
         radius: e.radius, typeId: e.type.id, hitFlash: e.hitFlash,
         isMoving: e.isMoving, walkPhase: e.walkPhase,
         ccTimer: e.ccTimer, ccType: e.ccType, drivebyDir: e.drivebyDir,
       })),
       projectiles: this.projectiles.map(p => ({
-        x: p.x, y: p.y, radius: p.radius, owner: p.owner, splashRadius: p.splashRadius,
+        id: p.id, x: p.x, y: p.y, radius: p.radius, owner: p.owner, splashRadius: p.splashRadius,
       })),
-      pickups: this.pickups.map(p => ({ x: p.x, y: p.y, kind: p.kind, life: p.life })),
+      pickups: this.pickups.map(p => ({ id: p.id, x: p.x, y: p.y, kind: p.kind, life: p.life })),
       bombs: this.bombs.map(b => ({
-        x: b.x, y: b.y, typeId: b.type.id, exploded: b.exploded,
+        id: b.id, x: b.x, y: b.y, typeId: b.type.id, exploded: b.exploded,
         effectTimer: b.effectTimer, fuseDuration: b.type.fuse,
       })),
       floatingTexts: this.floatingTexts.map(ft => ({
@@ -2324,33 +2342,134 @@ class Game {
     this.network.send({ type: "snapshot", state });
   }
 
-  // Guest-side: rebuilds lightweight, draw()-able instances from the
-  // host's snapshot and stashes them in this.renderState — see draw()'s
-  // drawFromSnapshot(), which reuses the exact same class draw() methods
-  // rather than duplicating any rendering logic.
+  // Guest-side: stashes the raw snapshot (prev + newly arrived) with a
+  // wall-clock timestamp, so drawFromSnapshot() can interpolate positions
+  // between the two rather than teleporting to the new one every ~10ms
+  // (see the id-matched lerp in interpolatedList). HUD/UI state itself
+  // isn't interpolated — it just tracks the latest snapshot directly.
   applySnapshot(state) {
     if (!this.network.isGuest) return;
 
-    const mkEnemy = e => Object.assign(Object.create(Enemy.prototype), {
+    const now = performance.now();
+    if (this._snapCurr) {
+      this._snapPrev = this._snapCurr;
+      // Measured, not assumed: real arrival gaps jitter with network
+      // conditions, so blending against the configured send rate would
+      // drift out of sync with actual delivery timing.
+      this._snapInterpDuration = clamp((now - this._snapReceivedAt) / 1000, 0.001, 0.5);
+    } else {
+      this._snapPrev = state; // first snapshot ever: nothing to blend from yet
+      this._snapInterpDuration = 1 / 100;
+    }
+    this._snapCurr = state;
+    this._snapReceivedAt = now;
+
+    this.zone = state.zone; // lets drawBackground()'s darkness-by-zone logic work unmodified
+    this.applyGuestUIState();
+  }
+
+  // Drives the start-screen/HUD/gameover overlays purely off the latest
+  // snapshot, since the guest has no independent notion of game state.
+  applyGuestUIState() {
+    const s = this._snapCurr;
+    if (!s) return;
+    if (s.gameState === "menu") {
+      this.setState("menu");
+      this.enterGuestWaiting();
+    } else if (s.gameState === "gameover") {
+      this.setState("gameover");
+      document.getElementById("final-zone").textContent = s.finalZone;
+      document.getElementById("final-money").textContent = s.finalMoney;
+      document.getElementById("gameover-guest-note").classList.remove("hidden");
+      document.getElementById("restart-btn").classList.add("hidden");
+    } else {
+      this.setState("playing");
+      document.getElementById("mp-wait-overlay").classList.toggle("hidden", s.gameState !== "paused" && s.gameState !== "zoneComplete");
+      this.updateHUDFromSnapshot(s);
+    }
+  }
+
+  // Raw snapshot fields only (flat meleeName/rangedName/ammo, not the
+  // nested shape mkPlayer() builds for drawing) — HUD text doesn't need
+  // interpolation, the latest value is always fine to show immediately.
+  updateHUDFromSnapshot(s) {
+    const me = s.players.find(p => p.id === this.network.myId);
+    if (me) {
+      const hpFrac = clamp(me.hp / me.maxHp, 0, 1);
+      document.getElementById("hp-fill").style.width = `${hpFrac * 100}%`;
+      document.getElementById("hp-label").textContent = `${Math.round(me.hp)} / ${me.maxHp}`;
+      const weaponLabel = document.getElementById("weapon-label");
+      weaponLabel.textContent = me.rangedName
+        ? `${me.meleeName} · ${me.rangedName} (${me.ammo}/${me.maxAmmo})`
+        : me.meleeName;
+    }
+    document.getElementById("zone-label").textContent = `Zona ${s.zone} — ${s.zoneName}`;
+    document.getElementById("wave-label").textContent = `Nemici rimasti: ${Math.max(0, s.waveTotal - s.waveDefeated)}`;
+    document.getElementById("money-label").textContent = `€ ${s.money}`;
+  }
+
+  lerp(a, b, t) { return a + (b - a) * t; }
+
+  // Shortest-path angle blend, so e.g. facing -3.1 -> 3.1 rad doesn't spin
+  // the long way around through 0 — it should visibly barely turn at all.
+  lerpAngle(a, b, t) {
+    let diff = b - a;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    return a + diff * t;
+  }
+
+  // Blends `posKeys`/`angleKeys` from the matching (by id) entry in
+  // prevList into currList at fraction t; an entity with no match (just
+  // spawned) is used as-is — nothing to blend from yet, so it simply pops
+  // in rather than sliding from nowhere.
+  interpolatedList(prevList, currList, t, posKeys, angleKeys) {
+    const prevById = new Map((prevList || []).map(e => [e.id, e]));
+    return currList.map(curr => {
+      const prev = prevById.get(curr.id);
+      if (!prev) return curr;
+      const merged = { ...curr };
+      for (const k of posKeys) merged[k] = this.lerp(prev[k], curr[k], t);
+      for (const k of angleKeys) merged[k] = this.lerpAngle(prev[k], curr[k], t);
+      return merged;
+    });
+  }
+
+  // Reconstruct lightweight, draw()-able instances from (interpolated)
+  // snapshot data, reusing the exact same class draw() methods rather than
+  // duplicating any rendering logic. Called fresh every frame in
+  // drawFromSnapshot() since the interpolated numbers change every frame.
+  mkEnemy(e) {
+    return Object.assign(Object.create(Enemy.prototype), {
       x: e.x, y: e.y, facing: e.facing, hp: e.hp, maxHp: e.maxHp, radius: e.radius,
       type: ENEMY_TYPES.find(t => t.id === e.typeId) || ENEMY_TYPES[0],
       hitFlash: e.hitFlash, isMoving: e.isMoving, walkPhase: e.walkPhase,
       ccTimer: e.ccTimer, ccType: e.ccType, drivebyDir: e.drivebyDir, dead: false,
     });
-    const mkProjectile = p => Object.assign(Object.create(Projectile.prototype), {
+  }
+  mkProjectile(p) {
+    return Object.assign(Object.create(Projectile.prototype), {
       x: p.x, y: p.y, radius: p.radius, owner: p.owner, splashRadius: p.splashRadius, dead: false,
     });
-    const mkPickup = p => Object.assign(Object.create(Pickup.prototype), {
+  }
+  mkPickup(p) {
+    return Object.assign(Object.create(Pickup.prototype), {
       x: p.x, y: p.y, kind: p.kind, life: p.life, radius: CONFIG.pickup.radius, dead: false,
     });
-    const mkBomb = b => Object.assign(Object.create(Bomb.prototype), {
+  }
+  mkBomb(b) {
+    return Object.assign(Object.create(Bomb.prototype), {
       x: b.x, y: b.y, type: THROWABLES.find(t => t.id === b.typeId) || THROWABLES[0],
       exploded: b.exploded, effectTimer: b.effectTimer, fuse: b.fuseDuration, dead: false,
     });
-    const mkText = ft => Object.assign(Object.create(FloatingText.prototype), {
+  }
+  mkText(ft) {
+    return Object.assign(Object.create(FloatingText.prototype), {
       x: ft.x, y: ft.y, text: ft.text, color: ft.color, life: ft.life, maxLife: ft.maxLife,
     });
-    const mkPlayer = p => Object.assign(Object.create(Player.prototype), {
+  }
+  mkPlayer(p) {
+    return Object.assign(Object.create(Player.prototype), {
       x: p.x, y: p.y, facing: p.facing, aimAngle: p.aimAngle, radius: p.radius,
       hp: p.hp, maxHp: p.maxHp,
       melee: { id: p.meleeId, name: p.meleeName, range: p.meleeRange || 0 },
@@ -2359,61 +2478,6 @@ class Game {
       hitFlash: p.hitFlash, isMoving: p.isMoving, walkPhase: p.walkPhase,
       attackActiveTimer: p.attackActiveTimer, invulnTimer: p.isInvulnerable ? 1 : 0,
     });
-
-    const me = state.players.find(p => p.id === this.network.myId);
-    const others = state.players.filter(p => p.id !== this.network.myId);
-    this.renderState = {
-      gameState: state.gameState,
-      zone: state.zone, zoneName: state.zoneName,
-      waveTotal: state.waveTotal, waveDefeated: state.waveDefeated, money: state.money,
-      finalZone: state.finalZone, finalMoney: state.finalMoney,
-      me: me ? mkPlayer(me) : null,
-      others: others.map(mkPlayer),
-      enemies: state.enemies.map(mkEnemy),
-      projectiles: state.projectiles.map(mkProjectile),
-      pickups: state.pickups.map(mkPickup),
-      bombs: state.bombs.map(mkBomb),
-      floatingTexts: state.floatingTexts.map(mkText),
-    };
-    this.zone = state.zone; // lets drawBackground()'s darkness-by-zone logic work unmodified
-    this.applyGuestUIState();
-  }
-
-  // Drives the start-screen/HUD/gameover overlays purely off the latest
-  // snapshot, since the guest has no independent notion of game state.
-  applyGuestUIState() {
-    const rs = this.renderState;
-    if (!rs) return;
-    if (rs.gameState === "menu") {
-      this.setState("menu");
-      this.enterGuestWaiting();
-    } else if (rs.gameState === "gameover") {
-      this.setState("gameover");
-      document.getElementById("final-zone").textContent = rs.finalZone;
-      document.getElementById("final-money").textContent = rs.finalMoney;
-      document.getElementById("gameover-guest-note").classList.remove("hidden");
-      document.getElementById("restart-btn").classList.add("hidden");
-    } else {
-      this.setState("playing");
-      document.getElementById("mp-wait-overlay").classList.toggle("hidden", rs.gameState !== "paused" && rs.gameState !== "zoneComplete");
-      this.updateHUDFromSnapshot(rs);
-    }
-  }
-
-  updateHUDFromSnapshot(rs) {
-    const me = rs.me;
-    if (me) {
-      const hpFrac = clamp(me.hp / me.maxHp, 0, 1);
-      document.getElementById("hp-fill").style.width = `${hpFrac * 100}%`;
-      document.getElementById("hp-label").textContent = `${Math.round(me.hp)} / ${me.maxHp}`;
-      const weaponLabel = document.getElementById("weapon-label");
-      weaponLabel.textContent = me.ranged
-        ? `${me.melee.name} · ${me.ranged.name} (${me.ammo}/${me.maxAmmo})`
-        : me.melee.name;
-    }
-    document.getElementById("zone-label").textContent = `Zona ${rs.zone} — ${rs.zoneName}`;
-    document.getElementById("wave-label").textContent = `Nemici rimasti: ${Math.max(0, rs.waveTotal - rs.waveDefeated)}`;
-    document.getElementById("money-label").textContent = `€ ${rs.money}`;
   }
 
   zoneName(zone) {
@@ -3048,7 +3112,7 @@ class Game {
   updateGuest(dt) {
     this._stateSendTimer -= dt;
     if (this._stateSendTimer <= 0) {
-      this._stateSendTimer = 1 / 20; // 20Hz is plenty for a movement/aim vector
+      this._stateSendTimer = 1 / 100;
       const move = {
         up: this.input.isDown("up"), down: this.input.isDown("down"),
         left: this.input.isDown("left"), right: this.input.isDown("right"),
@@ -3068,7 +3132,7 @@ class Game {
     if (this.network.isHost && this.remotePlayers.size > 0) {
       this._snapshotTimer -= dt;
       if (this._snapshotTimer <= 0) {
-        this._snapshotTimer = 1 / 20;
+        this._snapshotTimer = 1 / 100;
         this.sendSnapshot();
       }
     }
@@ -3235,15 +3299,29 @@ class Game {
   // there's no separate rendering implementation to keep in sync.
   drawFromSnapshot() {
     this.drawBackground();
-    const rs = this.renderState;
-    if (!rs) return;
-    for (const bomb of rs.bombs) bomb.draw(this.ctx);
-    for (const pickup of rs.pickups) pickup.draw(this.ctx);
-    for (const enemy of rs.enemies) enemy.draw(this.ctx);
-    for (const proj of rs.projectiles) proj.draw(this.ctx);
-    for (const other of rs.others) other.draw(this.ctx);
-    if (rs.me) rs.me.draw(this.ctx);
-    for (const ft of rs.floatingTexts) ft.draw(this.ctx);
+    const curr = this._snapCurr;
+    if (!curr) return;
+    const prev = this._snapPrev;
+    // How far between the previous and current snapshot "now" sits, based
+    // on real elapsed wall-clock time — not on frame count, so it stays
+    // correct regardless of the display's refresh rate or a jittery network.
+    const t = clamp((performance.now() - this._snapReceivedAt) / 1000 / this._snapInterpDuration, 0, 1);
+
+    const players = this.interpolatedList(prev.players, curr.players, t, ["x", "y"], ["facing", "aimAngle"]);
+    const enemies = this.interpolatedList(prev.enemies, curr.enemies, t, ["x", "y"], ["facing"]);
+    const projectiles = this.interpolatedList(prev.projectiles, curr.projectiles, t, ["x", "y"], []);
+    const me = players.find(p => p.id === this.network.myId);
+    const others = players.filter(p => p.id !== this.network.myId);
+
+    // Bombs/pickups/floating texts don't move (or barely do), so they're
+    // drawn straight from the latest snapshot with no interpolation.
+    for (const bomb of curr.bombs) this.mkBomb(bomb).draw(this.ctx);
+    for (const pickup of curr.pickups) this.mkPickup(pickup).draw(this.ctx);
+    for (const enemy of enemies) this.mkEnemy(enemy).draw(this.ctx);
+    for (const proj of projectiles) this.mkProjectile(proj).draw(this.ctx);
+    for (const other of others) this.mkPlayer(other).draw(this.ctx);
+    if (me) this.mkPlayer(me).draw(this.ctx);
+    for (const ft of curr.floatingTexts) this.mkText(ft).draw(this.ctx);
   }
 
   loop(now) {
