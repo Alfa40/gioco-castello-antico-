@@ -1161,7 +1161,7 @@ class Enemy {
       if (this.attackCooldownTimer <= 0) {
         this.attackCooldownTimer = this.stats.attackCooldown;
         const hit = player.takeDamage(this.stats.damage);
-        if (hit) game.onPlayerHit(this.stats);
+        if (hit) game.onPlayerHit(player);
       }
     } else {
       this.moveTowardBehavior(dt, player, d);
@@ -1556,6 +1556,139 @@ class InputHandler {
   isDown(dir) { return this.keys.has(dir) || this.gpMove[dir] || this.touchMove[dir]; }
 }
 
+// Input-shaped adapter fed by messages from the remote peer, so
+// Player.update(dt, input) can drive the second player exactly like it
+// drives the local one — see Game.applyRemoteState.
+class RemoteInputState {
+  constructor() {
+    this.moveState = { up: false, down: false, left: false, right: false };
+    this.aim = null; // { x, y } unit vector, or null when centered
+  }
+  isDown(dir) { return !!this.moveState[dir]; }
+  get gpAim() { return this.aim; }
+  get touchAim() { return null; }
+}
+
+/* =========================================================
+   MULTIPLAYER (WebSocket relay)
+========================================================= */
+// Talks to server.js, a dumb relay that only pairs two sockets into a room
+// (by a short numeric code) and forwards whatever JSON they send each
+// other — no game logic lives there. Whoever calls createRoom() is "host"
+// and runs the real simulation for both players; whoever calls joinRoom()
+// is "guest" and becomes a thin client: it only ships its input over the
+// socket and renders the periodic snapshots the host sends back (see
+// Game.applySnapshot / Game.sendSnapshot).
+class NetworkManager {
+  constructor(game) {
+    this.game = game;
+    this.ws = null;
+    this.role = null; // null | "host" | "guest"
+    this.roomCode = null;
+    this.peerConnected = false;
+    this.onStatusChange = null; // () => void, hooked up by the UI
+  }
+
+  get isMultiplayer() { return this.role !== null; }
+  get isHost() { return this.role === "host"; }
+  get isGuest() { return this.role === "guest"; }
+
+  wsUrl() {
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    return `${proto}//${location.host}/ws`;
+  }
+
+  connect() {
+    return new Promise((resolve, reject) => {
+      let ws;
+      try {
+        ws = new WebSocket(this.wsUrl());
+      } catch (e) { reject(e); return; }
+      this.ws = ws;
+      ws.onopen = () => resolve();
+      ws.onerror = () => reject(new Error("ws-connect-failed"));
+      ws.onclose = () => {
+        const wasGuest = this.role === "guest";
+        const wasMultiplayer = this.isMultiplayer;
+        this.peerConnected = false;
+        this.role = null;
+        this.roomCode = null;
+        if (wasMultiplayer) this.game.onNetworkClosed(wasGuest);
+        this.notify();
+      };
+      ws.onmessage = e => this.handleMessage(e.data);
+    });
+  }
+
+  notify() { if (this.onStatusChange) this.onStatusChange(); }
+
+  send(obj) {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(obj));
+  }
+
+  async createRoom() {
+    await this.connect();
+    this.send({ type: "create" });
+  }
+
+  async joinRoom(code) {
+    await this.connect();
+    this.send({ type: "join", code });
+  }
+
+  handleMessage(raw) {
+    let msg;
+    try { msg = JSON.parse(raw); } catch (e) { return; }
+    switch (msg.type) {
+      case "created":
+        this.role = "host";
+        this.roomCode = msg.code;
+        this.notify();
+        break;
+      case "joined":
+        this.role = "guest";
+        this.roomCode = msg.code;
+        this.notify();
+        // Tell the host what kind of input device we are, so it can decide
+        // whether to run auto-melee for our character (see Player.autoMeleeAttack).
+        this.send({ type: "hello", isTouchDevice: this.game.isTouchDevice });
+        break;
+      case "join-error":
+        this.game.onRoomJoinError(msg.reason);
+        break;
+      case "hello":
+        this.game.onRemoteHello(msg);
+        break;
+      case "peer-joined":
+        this.peerConnected = true;
+        this.notify();
+        this.game.onPeerJoined();
+        break;
+      case "peer-left":
+        this.peerConnected = false;
+        this.notify();
+        this.game.onPeerLeft();
+        break;
+      case "state":
+        this.game.applyRemoteState(msg);
+        break;
+      case "action":
+        this.game.applyRemoteAction(msg);
+        break;
+      case "snapshot":
+        this.game.applySnapshot(msg.state);
+        break;
+    }
+  }
+
+  disconnect() {
+    if (this.ws) { try { this.ws.close(); } catch (e) {} this.ws = null; }
+    this.role = null;
+    this.roomCode = null;
+    this.peerConnected = false;
+  }
+}
+
 /* =========================================================
    GAME
 ========================================================= */
@@ -1564,13 +1697,42 @@ class Game {
     this.canvas = document.getElementById("gameCanvas");
     this.ctx = this.canvas.getContext("2d");
 
+    this.network = new NetworkManager(this);
+    this.remotePlayer = null; // second Player instance, host-side only, driven by the guest's input
+    this.remoteInput = new RemoteInputState();
+    this.remoteIsTouchDevice = false;
+    this._snapshotTimer = 0;
+    this._stateSendTimer = 0;
+    this.renderState = null; // guest-only: last snapshot, reconstructed into draw()-able objects
+
     this.input = new InputHandler();
-    this.input.onAttack = () => { if (this.state === "playing") this.player.tryAttack(this); };
-    this.input.onRangedAttack = () => { if (this.state === "playing") this.player.tryRangedAttack(this); };
-    this.input.onDash = () => { if (this.state === "playing") this.player.tryDash(); };
-    this.input.onToggleMenu = () => this.toggleUpgradeMenu();
-    this.input.onThrowBomb = () => { if (this.state === "playing") this.throwBomb(); };
-    this.input.onSelectBomb = (value, absolute) => { if (this.state === "playing") this.selectBomb(value, absolute); };
+    // In multiplayer these callbacks fork on role: the host (or a solo
+    // player) executes the action directly exactly as before; a guest has
+    // no local simulation to act on, so it ships the action to the host
+    // over the network instead (see NetworkManager / applyRemoteAction).
+    this.input.onAttack = () => {
+      if (this.network.isGuest) { this.network.send({ type: "action", action: "attack" }); return; }
+      if (this.state === "playing") this.player.tryAttack(this);
+    };
+    this.input.onRangedAttack = () => {
+      if (this.network.isGuest) { this.network.send({ type: "action", action: "rangedAttack" }); return; }
+      if (this.state === "playing") this.player.tryRangedAttack(this);
+    };
+    this.input.onDash = () => {
+      if (this.network.isGuest) { this.network.send({ type: "action", action: "dash" }); return; }
+      if (this.state === "playing") this.player.tryDash();
+    };
+    // Pause/shop stays host-only in this version — the guest is a thin
+    // client and doesn't manage the shared shop UI, see README.
+    this.input.onToggleMenu = () => { if (!this.network.isGuest) this.toggleUpgradeMenu(); };
+    this.input.onThrowBomb = () => {
+      if (this.network.isGuest) { this.network.send({ type: "action", action: "throwBomb" }); return; }
+      if (this.state === "playing") this.throwBomb(this.player);
+    };
+    this.input.onSelectBomb = (value, absolute) => {
+      if (this.network.isGuest) { this.network.send({ type: "action", action: "selectBomb", value, absolute }); return; }
+      if (this.state === "playing") this.selectBomb(value, absolute, this.player);
+    };
 
     this.run = createRunState();
     this.player = new Player(CONFIG.width / 2, CONFIG.height / 2);
@@ -1596,6 +1758,7 @@ class Game {
     this.bindUI();
     this.detectTouchDevice();
     this.bindTouchControls();
+    this.bindMultiplayerUI();
     this.setupResponsiveScaling();
     this.updateHUDStatic();
     this.refreshSaveSummary();
@@ -1669,6 +1832,12 @@ class Game {
     if (saved.playerHp != null) this.player.hp = clamp(saved.playerHp, 1, this.player.maxHp);
     this.player.x = CONFIG.width / 2;
     this.player.y = CONFIG.height / 2;
+    if (this.remotePlayer) {
+      this.remotePlayer.refreshLoadout(this.run);
+      this.remotePlayer.resetForRun();
+      this.remotePlayer.x = CONFIG.width / 2 + 40;
+      this.remotePlayer.y = CONFIG.height / 2;
+    }
     this.enemies = [];
     this.projectiles = [];
     this.pickups = [];
@@ -1868,6 +2037,319 @@ class Game {
     base.addEventListener("touchcancel", onEnd, { passive: false });
   }
 
+  /* =======================================================
+     MULTIPLAYER
+  ======================================================= */
+
+  bindMultiplayerUI() {
+    const createBtn = document.getElementById("mp-create-btn");
+    const joinBtn = document.getElementById("mp-join-btn");
+    const codeInput = document.getElementById("mp-join-code");
+    const statusEl = document.getElementById("mp-status");
+    const idleRow = document.getElementById("mp-idle-row");
+    const leaveBtn = document.getElementById("mp-leave-btn");
+
+    const setStatus = (text, kind) => {
+      statusEl.classList.remove("mp-ok", "mp-error");
+      if (!text) { statusEl.classList.add("hidden"); statusEl.textContent = ""; return; }
+      statusEl.classList.remove("hidden");
+      if (kind) statusEl.classList.add(kind);
+      statusEl.textContent = text;
+    };
+
+    this.network.onStatusChange = () => {
+      const net = this.network;
+      if (!net.isMultiplayer) {
+        idleRow.classList.remove("hidden");
+        leaveBtn.classList.add("hidden");
+        setStatus("");
+        return;
+      }
+      idleRow.classList.add("hidden");
+      leaveBtn.classList.remove("hidden");
+      if (net.isHost) {
+        setStatus(
+          net.peerConnected
+            ? `Stanza ${net.roomCode} — secondo giocatore connesso!`
+            : `Stanza ${net.roomCode} — condividi il codice, in attesa di un secondo giocatore...`,
+          net.peerConnected ? "mp-ok" : null
+        );
+      } else if (net.isGuest) {
+        setStatus(`Connesso alla stanza ${net.roomCode}. In attesa dell'host...`, "mp-ok");
+        this.enterGuestWaiting();
+      }
+    };
+
+    createBtn.addEventListener("click", async () => {
+      setStatus("Connessione al server multiplayer...");
+      try { await this.network.createRoom(); }
+      catch (e) { setStatus("Impossibile connettersi al server multiplayer.", "mp-error"); }
+    });
+
+    joinBtn.addEventListener("click", async () => {
+      const code = codeInput.value.trim();
+      if (!/^\d{4}$/.test(code)) { setStatus("Inserisci un codice a 4 cifre.", "mp-error"); return; }
+      setStatus("Connessione al server multiplayer...");
+      try { await this.network.joinRoom(code); }
+      catch (e) { setStatus("Impossibile connettersi al server multiplayer.", "mp-error"); }
+    });
+
+    leaveBtn.addEventListener("click", () => {
+      const wasGuest = this.network.isGuest;
+      this.network.disconnect();
+      this.remotePlayer = null;
+      this.renderState = null;
+      document.getElementById("mp-wait-overlay").classList.add("hidden");
+      this.network.onStatusChange();
+      if (wasGuest) this.setState("menu");
+    });
+  }
+
+  // Shows a plain "waiting for the host" panel in place of the normal
+  // start-screen content once we've joined as guest — a guest never runs
+  // startRun()/resumeRun() itself, it just waits for snapshots to arrive.
+  enterGuestWaiting() {
+    document.getElementById("save-summary").classList.add("hidden");
+    document.getElementById("continue-btn").classList.add("hidden");
+    document.getElementById("start-btn").classList.add("hidden");
+  }
+
+  onRoomJoinError(reason) {
+    const statusEl = document.getElementById("mp-status");
+    statusEl.classList.remove("hidden");
+    statusEl.classList.remove("mp-ok");
+    statusEl.classList.add("mp-error");
+    statusEl.textContent = reason === "full" ? "Quella stanza è già piena." : "Codice stanza non valido.";
+  }
+
+  // The guest tells us (the host) whether it's a touch device right after
+  // joining, so we know whether to run auto-melee for its character too —
+  // see Player.autoMeleeAttack and the isTouchDevice-gated call in update().
+  onRemoteHello(msg) {
+    this.remoteIsTouchDevice = !!msg.isTouchDevice;
+  }
+
+  // Host-side: a peer just paired into our room. This can happen before a
+  // run has even started (menu) or mid-run — either way just hot-add a
+  // second Player sharing our loadout; nothing else needs to change since
+  // enemy targeting/collision already iterate over activePlayers.
+  onPeerJoined() {
+    if (!this.network.isHost) return;
+    this.remotePlayer = new Player(CONFIG.width / 2 + 40, CONFIG.height / 2);
+    this.remotePlayer.refreshLoadout(this.run);
+    this.remotePlayer.resetForRun();
+  }
+
+  onPeerLeft() {
+    if (this.network.isHost) {
+      // The guest dropped out — solo play continues uninterrupted.
+      this.remotePlayer = null;
+      return;
+    }
+    // We're the guest and the host disconnected: there's no local
+    // simulation to fall back on, so head back to the menu.
+    this.network.disconnect();
+    this.remotePlayer = null;
+    this.renderState = null;
+    document.getElementById("mp-wait-overlay").classList.add("hidden");
+    this.setState("menu");
+  }
+
+  // Our own socket closed (not a "peer-left" relay message — our actual
+  // connection to the relay dropped). For a guest that means the whole
+  // session is gone since it never ran its own simulation; a host just
+  // loses its networking and can keep playing solo.
+  onNetworkClosed(wasGuest) {
+    this.remotePlayer = null;
+    this.renderState = null;
+    document.getElementById("mp-wait-overlay").classList.add("hidden");
+    if (wasGuest) this.setState("menu");
+  }
+
+  // Every living player (host's own + the guest's, when present) — used by
+  // enemy targeting, projectile/pickup collision and the game-over check so
+  // none of that logic needs to know whether we're actually in multiplayer.
+  get activePlayers() {
+    const list = [this.player];
+    if (this.remotePlayer) list.push(this.remotePlayer);
+    return list.filter(p => p.hp > 0);
+  }
+
+  nearestPlayerTo(x, y) {
+    const candidates = this.activePlayers;
+    if (candidates.length === 0) return this.player;
+    let best = candidates[0];
+    let bestD = dist(x, y, best.x, best.y);
+    for (let i = 1; i < candidates.length; i++) {
+      const d = dist(x, y, candidates[i].x, candidates[i].y);
+      if (d < bestD) { bestD = d; best = candidates[i]; }
+    }
+    return best;
+  }
+
+  // Guest -> host: continuous movement/aim state, sent at a throttled rate
+  // (see update()). Applied straight into the RemoteInputState that drives
+  // this.remotePlayer.update() every host frame.
+  applyRemoteState(msg) {
+    if (!this.network.isHost) return;
+    this.remoteInput.moveState = msg.move || { up: false, down: false, left: false, right: false };
+    this.remoteInput.aim = msg.aim || null;
+  }
+
+  // Guest -> host: discrete one-shot actions (mirrors the local keyboard's
+  // edge-triggered onAttack/onDash/etc. — one message per press, cooldowns
+  // inside tryAttack/tryDash/etc. already make repeats harmless).
+  applyRemoteAction(msg) {
+    if (!this.network.isHost || !this.remotePlayer || this.state !== "playing") return;
+    switch (msg.action) {
+      case "attack": this.remotePlayer.tryAttack(this); break;
+      case "rangedAttack": this.remotePlayer.tryRangedAttack(this); break;
+      case "dash": this.remotePlayer.tryDash(); break;
+      case "throwBomb": this.throwBomb(this.remotePlayer); break;
+      case "selectBomb": this.selectBomb(msg.value, msg.absolute, this.remotePlayer); break;
+    }
+  }
+
+  // Host -> guest: a compact snapshot of everything the guest needs to
+  // render (see applySnapshot). Throttled — see the call site in update().
+  sendSnapshot() {
+    const serializePlayer = (p, role) => ({
+      role,
+      x: p.x, y: p.y, facing: p.facing, aimAngle: p.aimAngle,
+      radius: p.radius, hp: p.hp, maxHp: p.maxHp,
+      meleeId: p.melee && p.melee.id, meleeName: p.melee && p.melee.name,
+      rangedId: p._rangedWeaponId, rangedName: p.ranged && p.ranged.name,
+      ammo: p.ammo, maxAmmo: p.ranged && p.ranged.maxAmmo,
+      hitFlash: p.hitFlash, isMoving: p.isMoving, walkPhase: p.walkPhase,
+      attackActiveTimer: p.attackActiveTimer, isInvulnerable: p.isInvulnerable,
+      meleeRange: p.melee && p.melee.range,
+    });
+    const players = [serializePlayer(this.player, "host")];
+    if (this.remotePlayer) players.push(serializePlayer(this.remotePlayer, "guest"));
+
+    const state = {
+      gameState: this.state,
+      zone: this.zone,
+      zoneName: this.zoneName(this.zone),
+      waveTotal: this.waveTotalEnemies,
+      waveDefeated: this.waveEnemiesDefeated,
+      money: this.run.money,
+      finalZone: this.zone,
+      finalMoney: Math.max(0, this.moneyThisRun),
+      players,
+      enemies: this.enemies.filter(e => !e.dead).map(e => ({
+        x: e.x, y: e.y, facing: e.facing, hp: e.hp, maxHp: e.maxHp,
+        radius: e.radius, typeId: e.type.id, hitFlash: e.hitFlash,
+        isMoving: e.isMoving, walkPhase: e.walkPhase,
+        ccTimer: e.ccTimer, ccType: e.ccType, drivebyDir: e.drivebyDir,
+      })),
+      projectiles: this.projectiles.map(p => ({
+        x: p.x, y: p.y, radius: p.radius, owner: p.owner, splashRadius: p.splashRadius,
+      })),
+      pickups: this.pickups.map(p => ({ x: p.x, y: p.y, kind: p.kind, life: p.life })),
+      bombs: this.bombs.map(b => ({
+        x: b.x, y: b.y, typeId: b.type.id, exploded: b.exploded,
+        effectTimer: b.effectTimer, fuseDuration: b.type.fuse,
+      })),
+      floatingTexts: this.floatingTexts.map(ft => ({
+        x: ft.x, y: ft.y, text: ft.text, color: ft.color, life: ft.life, maxLife: ft.maxLife,
+      })),
+    };
+    this.network.send({ type: "snapshot", state });
+  }
+
+  // Guest-side: rebuilds lightweight, draw()-able instances from the
+  // host's snapshot and stashes them in this.renderState — see draw()'s
+  // drawFromSnapshot(), which reuses the exact same class draw() methods
+  // rather than duplicating any rendering logic.
+  applySnapshot(state) {
+    if (!this.network.isGuest) return;
+
+    const mkEnemy = e => Object.assign(Object.create(Enemy.prototype), {
+      x: e.x, y: e.y, facing: e.facing, hp: e.hp, maxHp: e.maxHp, radius: e.radius,
+      type: ENEMY_TYPES.find(t => t.id === e.typeId) || ENEMY_TYPES[0],
+      hitFlash: e.hitFlash, isMoving: e.isMoving, walkPhase: e.walkPhase,
+      ccTimer: e.ccTimer, ccType: e.ccType, drivebyDir: e.drivebyDir, dead: false,
+    });
+    const mkProjectile = p => Object.assign(Object.create(Projectile.prototype), {
+      x: p.x, y: p.y, radius: p.radius, owner: p.owner, splashRadius: p.splashRadius, dead: false,
+    });
+    const mkPickup = p => Object.assign(Object.create(Pickup.prototype), {
+      x: p.x, y: p.y, kind: p.kind, life: p.life, radius: CONFIG.pickup.radius, dead: false,
+    });
+    const mkBomb = b => Object.assign(Object.create(Bomb.prototype), {
+      x: b.x, y: b.y, type: THROWABLES.find(t => t.id === b.typeId) || THROWABLES[0],
+      exploded: b.exploded, effectTimer: b.effectTimer, fuse: b.fuseDuration, dead: false,
+    });
+    const mkText = ft => Object.assign(Object.create(FloatingText.prototype), {
+      x: ft.x, y: ft.y, text: ft.text, color: ft.color, life: ft.life, maxLife: ft.maxLife,
+    });
+    const mkPlayer = p => Object.assign(Object.create(Player.prototype), {
+      x: p.x, y: p.y, facing: p.facing, aimAngle: p.aimAngle, radius: p.radius,
+      hp: p.hp, maxHp: p.maxHp,
+      melee: { id: p.meleeId, name: p.meleeName, range: p.meleeRange || 0 },
+      ranged: p.rangedName ? { name: p.rangedName } : null,
+      _rangedWeaponId: p.rangedId, ammo: p.ammo,
+      hitFlash: p.hitFlash, isMoving: p.isMoving, walkPhase: p.walkPhase,
+      attackActiveTimer: p.attackActiveTimer, invulnTimer: p.isInvulnerable ? 1 : 0,
+    });
+
+    const me = state.players.find(p => p.role === "guest");
+    const other = state.players.find(p => p.role === "host");
+    this.renderState = {
+      gameState: state.gameState,
+      zone: state.zone, zoneName: state.zoneName,
+      waveTotal: state.waveTotal, waveDefeated: state.waveDefeated, money: state.money,
+      finalZone: state.finalZone, finalMoney: state.finalMoney,
+      me: me ? mkPlayer(me) : null,
+      other: other ? mkPlayer(other) : null,
+      enemies: state.enemies.map(mkEnemy),
+      projectiles: state.projectiles.map(mkProjectile),
+      pickups: state.pickups.map(mkPickup),
+      bombs: state.bombs.map(mkBomb),
+      floatingTexts: state.floatingTexts.map(mkText),
+    };
+    this.zone = state.zone; // lets drawBackground()'s darkness-by-zone logic work unmodified
+    this.applyGuestUIState();
+  }
+
+  // Drives the start-screen/HUD/gameover overlays purely off the latest
+  // snapshot, since the guest has no independent notion of game state.
+  applyGuestUIState() {
+    const rs = this.renderState;
+    if (!rs) return;
+    if (rs.gameState === "menu") {
+      this.setState("menu");
+      this.enterGuestWaiting();
+    } else if (rs.gameState === "gameover") {
+      this.setState("gameover");
+      document.getElementById("final-zone").textContent = rs.finalZone;
+      document.getElementById("final-money").textContent = rs.finalMoney;
+      document.getElementById("gameover-guest-note").classList.remove("hidden");
+      document.getElementById("restart-btn").classList.add("hidden");
+    } else {
+      this.setState("playing");
+      document.getElementById("mp-wait-overlay").classList.toggle("hidden", rs.gameState !== "paused" && rs.gameState !== "zoneComplete");
+      this.updateHUDFromSnapshot(rs);
+    }
+  }
+
+  updateHUDFromSnapshot(rs) {
+    const me = rs.me;
+    if (me) {
+      const hpFrac = clamp(me.hp / me.maxHp, 0, 1);
+      document.getElementById("hp-fill").style.width = `${hpFrac * 100}%`;
+      document.getElementById("hp-label").textContent = `${Math.round(me.hp)} / ${me.maxHp}`;
+      const weaponLabel = document.getElementById("weapon-label");
+      weaponLabel.textContent = me.ranged
+        ? `${me.melee.name} · ${me.ranged.name} (${me.ammo}/${me.maxAmmo})`
+        : me.melee.name;
+    }
+    document.getElementById("zone-label").textContent = `Zona ${rs.zone} — ${rs.zoneName}`;
+    document.getElementById("wave-label").textContent = `Nemici rimasti: ${Math.max(0, rs.waveTotal - rs.waveDefeated)}`;
+    document.getElementById("money-label").textContent = `€ ${rs.money}`;
+  }
+
   zoneName(zone) {
     const names = CONFIG.zoneNames;
     if (zone <= names.length) return names[zone - 1];
@@ -1906,6 +2388,12 @@ class Game {
     this.player.resetForRun();
     this.player.x = CONFIG.width / 2;
     this.player.y = CONFIG.height / 2;
+    if (this.remotePlayer) {
+      this.remotePlayer.refreshLoadout(this.run);
+      this.remotePlayer.resetForRun();
+      this.remotePlayer.x = CONFIG.width / 2 + 40;
+      this.remotePlayer.y = CONFIG.height / 2;
+    }
     this.zone = 1;
     this.moneyThisRun = 0;
     this.enemies = [];
@@ -1920,6 +2408,7 @@ class Game {
 
   startZone() {
     this.player.healOnNewZone();
+    if (this.remotePlayer) this.remotePlayer.healOnNewZone();
     const count = Math.min(
       CONFIG.waves.baseEnemies + (this.zone - 1) * CONFIG.waves.perZone,
       CONFIG.waves.maxEnemies
@@ -1954,7 +2443,9 @@ class Game {
   spawnDriveby(type) {
     const fromLeft = Math.random() < 0.5;
     const x = fromLeft ? -50 : CONFIG.width + 50;
-    const y = clamp(this.player.y + rand(-80, 80), 90, CONFIG.height - 30);
+    const players = this.activePlayers;
+    const lanePlayer = players[randInt(0, players.length - 1)] || this.player;
+    const y = clamp(lanePlayer.y + rand(-80, 80), 90, CONFIG.height - 30);
     const zoneStats = this.enemyStatsForZone(this.zone, type);
     const enemy = new Enemy(x, y, zoneStats, type);
     enemy.drivebyDir = fromLeft ? 1 : -1;
@@ -1972,30 +2463,33 @@ class Game {
 
   // value/absolute: keyboard digit keys pass (index, true) to jump straight
   // to a slot; the gamepad's L1 passes (1, false) to cycle forward by one.
-  selectBomb(value, absolute) {
+  // `actor` defaults to the local player but is passed explicitly as
+  // this.remotePlayer when applying a guest's action in multiplayer, since
+  // the selected slot is tracked per-player, not per-run.
+  selectBomb(value, absolute, actor = this.player) {
     const n = THROWABLES.length;
-    this.player.selectedThrowable = absolute ? value % n : (this.player.selectedThrowable + value + n) % n;
+    actor.selectedThrowable = absolute ? value % n : (actor.selectedThrowable + value + n) % n;
   }
 
-  throwBomb() {
-    const type = THROWABLES[this.player.selectedThrowable];
+  throwBomb(actor = this.player) {
+    const type = THROWABLES[actor.selectedThrowable];
     if (!type) return;
     const count = this.run.bombs[type.id] || 0;
     if (count <= 0) { SoundManager.emptyClick(); return; }
     this.run.bombs[type.id] = count - 1;
 
-    const angle = this.player.aimAngle;
+    const angle = actor.aimAngle;
     let x, y, stickTarget = null;
     if (type.sticky) {
-      stickTarget = this.findNearestInCone(this.player.x, this.player.y, angle, THROW_CONE, THROW_RANGE);
+      stickTarget = this.findNearestInCone(actor.x, actor.y, angle, THROW_CONE, THROW_RANGE);
     }
     if (stickTarget) {
       x = stickTarget.x;
       y = stickTarget.y;
     } else {
       const margin = 20;
-      x = clamp(this.player.x + Math.cos(angle) * THROW_RANGE, margin, CONFIG.width - margin);
-      y = clamp(this.player.y + Math.sin(angle) * THROW_RANGE, margin, CONFIG.height - margin);
+      x = clamp(actor.x + Math.cos(angle) * THROW_RANGE, margin, CONFIG.width - margin);
+      y = clamp(actor.y + Math.sin(angle) * THROW_RANGE, margin, CONFIG.height - margin);
     }
     this.bombs.push(new Bomb(type, x, y, stickTarget));
     SoundManager.throwBomb();
@@ -2060,50 +2554,56 @@ class Game {
     this.waveEnemiesDefeated++;
   }
 
-  // At most one pickup per kill: a medikit if the player could use one,
-  // otherwise a shot at ammo if they're carrying a gun.
+  // At most one pickup per kill: a medikit if any active player could use
+  // one, otherwise a shot at ammo if any of them carries a gun.
   rollPickupDrop(enemy) {
     const cfg = CONFIG.pickup;
-    if (Math.random() < cfg.medikitChance && this.player.hp < this.player.maxHp * 0.9) {
+    const players = this.activePlayers;
+    const anyNeedsHeal = players.some(p => p.hp < p.maxHp * 0.9);
+    if (Math.random() < cfg.medikitChance && anyNeedsHeal) {
       const heal = Math.round(this.player.maxHp * cfg.medikitHealFraction);
       this.pickups.push(new Pickup(enemy.x, enemy.y, "health", heal));
       return;
     }
-    if (this.player.ranged && Math.random() < cfg.ammoChance) {
+    if (players.some(p => p.ranged) && Math.random() < cfg.ammoChance) {
       const amount = randInt(cfg.ammoAmountRange[0], cfg.ammoAmountRange[1]);
       this.pickups.push(new Pickup(enemy.x, enemy.y, "ammo", amount));
     }
   }
 
-  collectPickup(pickup) {
+  // `actor` is whichever active player is closest to the pickup — see the
+  // call site in update(), which already picked that out.
+  collectPickup(pickup, actor = this.player) {
     if (pickup.kind === "health") {
-      const before = this.player.hp;
-      this.player.hp = clamp(this.player.hp + pickup.amount, 0, this.player.maxHp);
-      const healed = Math.round(this.player.hp - before);
+      const before = actor.hp;
+      actor.hp = clamp(actor.hp + pickup.amount, 0, actor.maxHp);
+      const healed = Math.round(actor.hp - before);
       if (healed > 0) {
-        this.floatingTexts.push(new FloatingText(this.player.x, this.player.y - 26, `+${healed} HP`, "#3ddc71"));
+        this.floatingTexts.push(new FloatingText(actor.x, actor.y - 26, `+${healed} HP`, "#3ddc71"));
         SoundManager.heal();
       }
-    } else if (pickup.kind === "ammo" && this.player.ranged) {
-      const add = Math.min(pickup.amount, this.player.ranged.maxAmmo - this.player.ammo);
+    } else if (pickup.kind === "ammo" && actor.ranged) {
+      const add = Math.min(pickup.amount, actor.ranged.maxAmmo - actor.ammo);
       if (add > 0) {
-        this.player.ammo += add;
-        this.floatingTexts.push(new FloatingText(this.player.x, this.player.y - 26, `+${add} munizioni`, "#ffd24a"));
+        actor.ammo += add;
+        this.floatingTexts.push(new FloatingText(actor.x, actor.y - 26, `+${add} munizioni`, "#ffd24a"));
         SoundManager.ammoPickup();
       }
     }
   }
 
-  onPlayerHit(enemyStats) {
+  // `actor` is whichever player actually took the hit — see the call site
+  // in update(). The stolen money still comes out of the shared run purse.
+  onPlayerHit(actor = this.player) {
     if (this.run.money <= 0) return;
     const stealFrac = 0.05;
-    const reduction = this.player.stats.stealReduction;
+    const reduction = actor.stats.stealReduction;
     let stolen = Math.round(this.run.money * stealFrac * (1 - reduction));
     stolen = Math.min(stolen, this.run.money);
     if (stolen > 0) {
       this.run.money -= stolen;
       this.moneyThisRun -= Math.min(stolen, Math.max(0, this.moneyThisRun));
-      this.floatingTexts.push(new FloatingText(this.player.x, this.player.y - 26, `-${stolen}€ rubati!`, "#d9455f"));
+      this.floatingTexts.push(new FloatingText(actor.x, actor.y - 26, `-${stolen}€ rubati!`, "#d9455f"));
     }
   }
 
@@ -2186,12 +2686,14 @@ class Game {
             this.run.upgrades[upg.id] = level + 1;
             this.run.playerLevel++;
             this.player.refreshLoadout(this.run);
+            if (this.remotePlayer) this.remotePlayer.refreshLoadout(this.run);
             if (upg.id === "firstaid") {
               // Buying more max HP also tops the player up to at least 3/4 of
               // the new max, instead of just preserving whatever HP was
               // missing before the purchase (refreshLoadout's default) —
               // never reduces current HP if it's already higher than that.
               this.player.hp = Math.max(this.player.hp, Math.round(this.player.maxHp * 0.75));
+              if (this.remotePlayer) this.remotePlayer.hp = Math.max(this.remotePlayer.hp, Math.round(this.remotePlayer.maxHp * 0.75));
             }
             this.renderUpgradeList();
             this.updateHUDStatic();
@@ -2287,6 +2789,7 @@ class Game {
     this.run.meleeTier = idx;
     this.run.playerLevel++;
     this.player.refreshLoadout(this.run);
+    if (this.remotePlayer) this.remotePlayer.refreshLoadout(this.run);
     this.openUpgradeMenu(this.menuMode);
     this.updateHUDStatic();
   }
@@ -2303,6 +2806,7 @@ class Game {
     this.run.rangedTier = idx;
     this.run.playerLevel++;
     this.player.refreshLoadout(this.run);
+    if (this.remotePlayer) this.remotePlayer.refreshLoadout(this.run);
     this.openUpgradeMenu(this.menuMode);
     this.updateHUDStatic();
   }
@@ -2313,6 +2817,7 @@ class Game {
     this.run.meleeWeaponUpgrades.push(id);
     this.run.playerLevel++;
     this.player.refreshLoadout(this.run);
+    if (this.remotePlayer) this.remotePlayer.refreshLoadout(this.run);
     this.openUpgradeMenu(this.menuMode);
     this.updateHUDStatic();
   }
@@ -2323,6 +2828,7 @@ class Game {
     this.run.rangedWeaponUpgrades.push(id);
     this.run.playerLevel++;
     this.player.refreshLoadout(this.run);
+    if (this.remotePlayer) this.remotePlayer.refreshLoadout(this.run);
     this.openUpgradeMenu(this.menuMode);
     this.updateHUDStatic();
   }
@@ -2478,7 +2984,37 @@ class Game {
     document.getElementById("bomb-label").textContent = `${bombType.name} x${bombCount}`;
   }
 
+  // Guest: no local simulation at all — just poll our own input and ship it
+  // to the host at a throttled rate. Everything on screen instead comes
+  // from applySnapshot()/draw()'s drawFromSnapshot() path.
+  updateGuest(dt) {
+    this._stateSendTimer -= dt;
+    if (this._stateSendTimer <= 0) {
+      this._stateSendTimer = 1 / 20; // 20Hz is plenty for a movement/aim vector
+      const move = {
+        up: this.input.isDown("up"), down: this.input.isDown("down"),
+        left: this.input.isDown("left"), right: this.input.isDown("right"),
+      };
+      const stickAim = this.input.gpAim || this.input.touchAim;
+      const aim = stickAim ? { x: stickAim.x, y: stickAim.y } : null;
+      this.network.send({ type: "state", move, aim });
+    }
+  }
+
   update(dt) {
+    if (this.network.isGuest) { this.updateGuest(dt); return; }
+
+    // Host -> guest snapshot broadcast. Runs regardless of this.state so a
+    // connected guest still sees the pause/shop/game-over overlays, not
+    // just live combat — see the early return for "playing"-only logic below.
+    if (this.network.isHost && this.network.peerConnected) {
+      this._snapshotTimer -= dt;
+      if (this._snapshotTimer <= 0) {
+        this._snapshotTimer = 1 / 20;
+        this.sendSnapshot();
+      }
+    }
+
     if (this.state !== "playing") return;
 
     this.player.update(dt, this.input);
@@ -2498,6 +3034,16 @@ class Game {
     // instead. Keyboard/gamepad melee stays the manual gpAttack/Space above.
     if (this.isTouchDevice) this.player.autoMeleeAttack(this);
 
+    // Host-side simulation of the guest's character: driven by the last
+    // continuous input state it sent (see applyRemoteState), with its
+    // discrete actions (attack/dash/...) applied immediately as they arrive
+    // over the socket — see applyRemoteAction.
+    if (this.remotePlayer && this.remotePlayer.hp > 0) {
+      this.remotePlayer.update(dt, this.remoteInput);
+      this.remotePlayer.autoFireRanged(this);
+      if (this.remoteIsTouchDevice) this.remotePlayer.autoMeleeAttack(this);
+    }
+
     if (this.enemiesToSpawn > 0) {
       this.spawnTimer -= dt;
       const concurrentCap = Math.min(2 + Math.floor((this.zone - 1) / 2), CONFIG.maxConcurrentEnemies);
@@ -2508,8 +3054,11 @@ class Game {
       }
     }
 
+    // Each enemy targets whichever active player is nearest to IT — this is
+    // the only change needed for co-op AI, since every behavior branch
+    // inside Enemy already just uses whatever `player` it's handed.
     for (const enemy of this.enemies) {
-      enemy.update(dt, this.player, this);
+      enemy.update(dt, this.nearestPlayerTo(enemy.x, enemy.y), this);
     }
     this.enemies = this.enemies.filter(e => !e.dead);
 
@@ -2517,10 +3066,13 @@ class Game {
       if (proj.dead) continue;
       proj.update(dt);
       if (proj.owner === "enemy") {
-        if (!proj.dead && dist(proj.x, proj.y, this.player.x, this.player.y) <= proj.radius + this.player.radius) {
-          const hit = this.player.takeDamage(proj.damage);
-          if (hit) this.onPlayerHit();
-          proj.dead = true;
+        for (const p of this.activePlayers) {
+          if (proj.dead) break;
+          if (dist(proj.x, proj.y, p.x, p.y) <= proj.radius + p.radius) {
+            const hit = p.takeDamage(proj.damage);
+            if (hit) this.onPlayerHit(p);
+            proj.dead = true;
+          }
         }
       } else {
         for (const enemy of this.enemies) {
@@ -2547,9 +3099,13 @@ class Game {
     for (const pickup of this.pickups) {
       if (pickup.dead) continue;
       pickup.update(dt);
-      if (!pickup.dead && dist(this.player.x, this.player.y, pickup.x, pickup.y) <= this.player.radius + pickup.radius) {
-        this.collectPickup(pickup);
-        pickup.dead = true;
+      if (pickup.dead) continue;
+      for (const p of this.activePlayers) {
+        if (dist(p.x, p.y, pickup.x, pickup.y) <= p.radius + pickup.radius) {
+          this.collectPickup(pickup, p);
+          pickup.dead = true;
+          break;
+        }
       }
     }
     this.pickups = this.pickups.filter(p => !p.dead);
@@ -2560,7 +3116,7 @@ class Game {
     for (const ft of this.floatingTexts) ft.update(dt);
     this.floatingTexts = this.floatingTexts.filter(ft => !ft.dead);
 
-    if (this.player.hp <= 0) {
+    if (this.activePlayers.length === 0) {
       this.triggerGameOver();
       return;
     }
@@ -2604,13 +3160,31 @@ class Game {
   }
 
   draw() {
+    if (this.network.isGuest) { this.drawFromSnapshot(); return; }
     this.drawBackground();
     for (const bomb of this.bombs) bomb.draw(this.ctx);
     for (const pickup of this.pickups) pickup.draw(this.ctx);
     for (const enemy of this.enemies) enemy.draw(this.ctx);
     for (const proj of this.projectiles) proj.draw(this.ctx);
     this.player.draw(this.ctx);
+    if (this.remotePlayer) this.remotePlayer.draw(this.ctx);
     for (const ft of this.floatingTexts) ft.draw(this.ctx);
+  }
+
+  // Guest-only render path: draws whatever the last snapshot reconstructed
+  // (see applySnapshot), reusing the exact same class draw() methods so
+  // there's no separate rendering implementation to keep in sync.
+  drawFromSnapshot() {
+    this.drawBackground();
+    const rs = this.renderState;
+    if (!rs) return;
+    for (const bomb of rs.bombs) bomb.draw(this.ctx);
+    for (const pickup of rs.pickups) pickup.draw(this.ctx);
+    for (const enemy of rs.enemies) enemy.draw(this.ctx);
+    for (const proj of rs.projectiles) proj.draw(this.ctx);
+    if (rs.other) rs.other.draw(this.ctx);
+    if (rs.me) rs.me.draw(this.ctx);
+    for (const ft of rs.floatingTexts) ft.draw(this.ctx);
   }
 
   loop(now) {
@@ -2624,5 +3198,5 @@ class Game {
 }
 
 window.addEventListener("load", () => {
-  new Game();
+  window.__game = new Game();
 });
