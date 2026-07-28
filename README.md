@@ -72,6 +72,16 @@ Poi apri `http://localhost:8080` (o l'indirizzo/porta del server, se ospitato al
 
 Ci si può unire anche a partita già iniziata (l'host può creare la stanza e giocare da solo finché gli altri non si collegano, uno alla volta, fino al limite di 4). La sincronizzazione avviene circa 20 volte al secondo: su una connessione con latenza alta il movimento degli altri giocatori può risultare leggermente meno fluido del proprio, essendo un aggiornamento periodico e non un movimento predetto localmente.
 
+### Ospitarlo online gratis (per giocare con amici non sulla stessa rete)
+
+`npm start` in locale funziona solo tra dispositivi sulla stessa rete (o dietro un tunnel tipo `cloudflared`/ngrok). Per un indirizzo pubblico fisso, sempre raggiungibile, il repo include un `render.yaml` pronto per [Render](https://render.com) (piano gratuito):
+
+1. Crea un account su render.com (anche via GitHub).
+2. **New → Blueprint**, collega questo repository: Render legge da solo `render.yaml` e propone build/start command già corretti — basta confermare.
+3. Deploy: dopo qualche minuto ottieni un indirizzo tipo `https://crazy-town.onrender.com`, che serve l'intero gioco (singolo e multiplayer) da un unico processo.
+
+Limite del piano gratuito: il servizio si addormenta dopo ~15 minuti di inattività e la prima richiesta successiva impiega 30-60 secondi a risvegliarlo — basta aprire il link un attimo prima di iniziare a giocare.
+
 ## Il loop di gioco
 
 - Sconfiggi i nemici di ogni zona per guadagnare soldi.
