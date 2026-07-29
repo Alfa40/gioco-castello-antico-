@@ -42,18 +42,26 @@ const CONFIG = {
     radius: 10,
   },
 
+  // Stretched ~4x from the original curve so the difficulty/money that used
+  // to land around zone 20-30 now lands around zone 80-100, giving a much
+  // longer run to spend the expanded upgrade/weapon content on (see
+  // UPGRADES, MELEE_WEAPONS, RANGED_WEAPONS below).
   zoneScaling: {
-    speedPerZone: 0.07,
-    hpPerZone: 0.13,
-    damagePerZone: 0.09,
-    cooldownFactorPerZone: 0.045, // reduces cooldown -> faster attacks
+    speedPerZone: 0.018,
+    hpPerZone: 0.033,
+    damagePerZone: 0.023,
+    cooldownFactorPerZone: 0.011, // reduces cooldown -> faster attacks
     minCooldown: 0.35,
-    moneyPerZone: 0.10,
+    moneyPerZone: 0.025,
     // Separate, much slower scaling tied to the player's own power (see
     // Game.playerLevel): the more upgrades/weapons bought, the tougher
     // enemies get too, so fully kitting out doesn't trivialize the run.
-    hpPerPlayerLevel: 0.02,
-    damagePerPlayerLevel: 0.02,
+    // Lower than before in raw terms because there's now ~1.9x more total
+    // purchasable levels (11 house upgrades + 5 sub-upgrades per weapon
+    // tier instead of 6 + 1-4) — this keeps the same overall "fully kitted
+    // out" tax at the new, higher max level instead of taxing much harder.
+    hpPerPlayerLevel: 0.011,
+    damagePerPlayerLevel: 0.011,
   },
 
   waves: {
@@ -69,6 +77,10 @@ const CONFIG = {
     "Il blocco centrale",
     "Zona rossa",
     "Il fondo del quartiere",
+    "Oltre i confini conosciuti",
+    "Il centro città in fiamme",
+    "Le torri abbandonate",
+    "L'ultimo isolato",
   ],
 };
 
@@ -208,6 +220,51 @@ const UPGRADES = [
     maxLevel: 10,
     perLevel: 0.09, // fraction of missing hp healed on new zone — 10 levels exactly reach the 0.9 clamp in refreshLoadout()
   },
+  {
+    id: "bombCapacity",
+    name: "Zaino esplosivi",
+    desc: "Aumenta la scorta massima di ogni esplosivo.",
+    baseCost: 300,
+    growth: 1.5,
+    maxLevel: 5,
+    perLevel: 1, // + maxCarry, applied uniformly to every throwable type
+  },
+  {
+    id: "dashCooldown",
+    name: "Scatto potenziato",
+    desc: "Riduce il tempo di recupero dello scatto.",
+    baseCost: 200,
+    growth: 1.5,
+    maxLevel: 8,
+    perLevel: 0.08, // fraction of base dashCooldown shaved off — clamped to 0.65 total in refreshLoadout()
+  },
+  {
+    id: "moneyBonus",
+    name: "Fortuna del quartiere",
+    desc: "Aumenta i soldi guadagnati dai nemici sconfitti.",
+    baseCost: 250,
+    growth: 1.5,
+    maxLevel: 10,
+    perLevel: 0.04, // + fraction of money earned per kill
+  },
+  {
+    id: "hitInvuln",
+    name: "Riflessi rapidi",
+    desc: "Allunga l'invulnerabilità appena dopo essere colpito.",
+    baseCost: 220,
+    growth: 1.5,
+    maxLevel: 8,
+    perLevel: 0.05, // + seconds added to CONFIG.player.hitInvuln
+  },
+  {
+    id: "meleeSpeed",
+    name: "Adrenalina",
+    desc: "Riduce il tempo di recupero degli attacchi in mischia, con qualunque arma bianca.",
+    baseCost: 260,
+    growth: 1.5,
+    maxLevel: 8,
+    perLevel: 0.035, // fraction of melee cooldown shaved off — clamped to 0.5 total in refreshLoadout()
+  },
 ];
 
 // Sequential melee tiers: each purchase replaces the previous weapon. Every
@@ -228,37 +285,55 @@ const MELEE_WEAPONS = [
     id: "knife1", name: "Coltello", desc: "Taglia in fretta: più danno e colpi più veloci.",
     cost: 60, damage: 26, range: 50, cooldown: 0.32,
     upgrades: [
-      { id: "knife1_grip", name: "Impugnatura migliorata", desc: "Colpi leggermente più veloci.", cost: 45, cooldownMult: 0.9 },
-      { id: "knife1_blade", name: "Lama più affilata", desc: "Più danno per colpo.", cost: 55, damage: 6 },
+      { id: "knife1_grip", name: "Impugnatura migliorata", desc: "Colpi leggermente più veloci.", cost: 20, cooldownMult: 0.94 },
+      { id: "knife1_blade", name: "Lama più affilata", desc: "Più danno per colpo.", cost: 25, damage: 4 },
+      { id: "knife1_pommel", name: "Pomello bilanciato", desc: "Colpi ancora più veloci.", cost: 20, cooldownMult: 0.94 },
+      { id: "knife1_edge", name: "Filo rifinito", desc: "Più danno per colpo.", cost: 25, damage: 4 },
+      { id: "knife1_reach", name: "Lama allungata", desc: "Colpisce leggermente più lontano.", cost: 20, range: 6 },
     ],
   },
   {
     id: "knife2", name: "Coltello a serramanico", desc: "Lama migliore: ancora più danno e velocità.",
     cost: 140, damage: 36, range: 50, cooldown: 0.24,
     upgrades: [
-      { id: "knife2_grip", name: "Impugnatura rinforzata", desc: "Colpi ancora più veloci.", cost: 90, cooldownMult: 0.9 },
-      { id: "knife2_blade", name: "Lama temprata", desc: "Più danno per colpo.", cost: 110, damage: 8 },
+      { id: "knife2_grip", name: "Impugnatura rinforzata", desc: "Colpi ancora più veloci.", cost: 45, cooldownMult: 0.94 },
+      { id: "knife2_blade", name: "Lama temprata", desc: "Più danno per colpo.", cost: 55, damage: 6 },
+      { id: "knife2_pommel", name: "Pomello zavorrato", desc: "Colpi ancora più veloci.", cost: 45, cooldownMult: 0.94 },
+      { id: "knife2_edge", name: "Filo damascato", desc: "Più danno per colpo.", cost: 55, damage: 6 },
+      { id: "knife2_reach", name: "Lama allungata", desc: "Colpisce leggermente più lontano.", cost: 40, range: 6 },
     ],
   },
   {
     id: "bat", name: "Mazza da baseball", desc: "Più lenta, ma colpisce molto più lontano e più forte.",
     cost: 260, damage: 50, range: 78, cooldown: 0.55,
     upgrades: [
-      { id: "bat_spikes", name: "Mazza chiodata", desc: "Chiodi che aumentano il danno.", cost: 160, damage: 14 },
+      { id: "bat_grip", name: "Impugnatura fasciata", desc: "Colpi leggermente più veloci.", cost: 70, cooldownMult: 0.95 },
+      { id: "bat_spikes", name: "Mazza chiodata", desc: "Chiodi che aumentano il danno.", cost: 90, damage: 10 },
+      { id: "bat_counterweight", name: "Contrappeso", desc: "Colpi leggermente più veloci.", cost: 70, cooldownMult: 0.95 },
+      { id: "bat_corked", name: "Corpo rinforzato", desc: "Più danno per colpo.", cost: 90, damage: 10 },
+      { id: "bat_handle", name: "Manico allungato", desc: "Colpisce leggermente più lontano.", cost: 70, range: 8 },
     ],
   },
   {
     id: "pole", name: "Palo d'acciaio", desc: "Portata e danno massimi tra le lame e i pali. Non fa sconti.",
     cost: 420, damage: 75, range: 94, cooldown: 0.6,
     upgrades: [
-      { id: "pole_reinforced", name: "Palo rinforzato", desc: "Struttura rinforzata: ancora più danno.", cost: 220, damage: 18 },
+      { id: "pole_grip", name: "Impugnatura antiscivolo", desc: "Colpi leggermente più veloci.", cost: 110, cooldownMult: 0.95 },
+      { id: "pole_reinforced", name: "Palo rinforzato", desc: "Struttura rinforzata: ancora più danno.", cost: 140, damage: 15 },
+      { id: "pole_counterweight", name: "Bilanciamento", desc: "Colpi leggermente più veloci.", cost: 110, cooldownMult: 0.95 },
+      { id: "pole_tempered", name: "Acciaio temprato", desc: "Più danno per colpo.", cost: 140, damage: 15 },
+      { id: "pole_extended", name: "Palo allungato", desc: "Colpisce leggermente più lontano.", cost: 110, range: 10 },
     ],
   },
   {
     id: "hammer", name: "Martello", desc: "Il colpo più pesante di tutti: lentissimo da rialzare, ma devastante.",
     cost: 650, damage: 105, range: 86, cooldown: 0.78,
     upgrades: [
-      { id: "hammer_reinforced", name: "Testa rinforzata", desc: "Testa più pesante: ancora più danno.", cost: 320, damage: 26 },
+      { id: "hammer_grip", name: "Manico ammortizzato", desc: "Colpi leggermente più veloci.", cost: 170, cooldownMult: 0.96 },
+      { id: "hammer_head", name: "Testa rinforzata", desc: "Testa più pesante: ancora più danno.", cost: 210, damage: 20 },
+      { id: "hammer_counterbalance", name: "Bilanciamento", desc: "Colpi leggermente più veloci.", cost: 170, cooldownMult: 0.96 },
+      { id: "hammer_forged", name: "Acciaio forgiato", desc: "Più danno per colpo.", cost: 210, damage: 20 },
+      { id: "hammer_handle", name: "Manico allungato", desc: "Colpisce leggermente più lontano.", cost: 170, range: 10 },
     ],
   },
 ];
@@ -270,32 +345,35 @@ const MELEE_WEAPONS = [
 const RANGED_WEAPONS = [
   {
     id: "pistol", name: "Pistola", desc: "Colpisce a distanza. Cadenza moderata.",
-    cost: 220, damage: 22, cooldown: 0.6, projectileSpeed: 560, minZone: 3, maxAmmo: 24, costPerAmmo: 6,
+    cost: 220, damage: 22, cooldown: 0.6, projectileSpeed: 560, minZone: 12, maxAmmo: 24, costPerAmmo: 6,
     upgrades: [
       { id: "pistol_sight", name: "Mirino", desc: "Aggancia i bersagli con più margine.", cost: 80, aimConeBonus: 0.06 },
       { id: "pistol_stock", name: "Calcio", desc: "Cadenza di fuoco più rapida.", cost: 90, cooldownMult: 0.9 },
       { id: "pistol_barrel", name: "Canna lunga", desc: "Più danno per colpo.", cost: 100, damage: 5 },
       { id: "pistol_mag", name: "Caricatore esteso", desc: "Più munizioni massime.", cost: 70, maxAmmo: 8 },
+      { id: "pistol_rifling", name: "Canna rigata", desc: "Ancora più danno per colpo.", cost: 90, damage: 4 },
     ],
   },
   {
     id: "smg", name: "Mitra", desc: "Raffica rapida, danno per colpo minore.",
-    cost: 480, damage: 13, cooldown: 0.14, projectileSpeed: 640, minZone: 5, maxAmmo: 60, costPerAmmo: 4,
+    cost: 480, damage: 13, cooldown: 0.14, projectileSpeed: 640, minZone: 20, maxAmmo: 60, costPerAmmo: 4,
     upgrades: [
       { id: "smg_sight", name: "Mirino", desc: "Aggancia i bersagli con più margine.", cost: 150, aimConeBonus: 0.06 },
       { id: "smg_stock", name: "Calcio", desc: "Cadenza di fuoco più rapida.", cost: 170, cooldownMult: 0.9 },
       { id: "smg_barrel", name: "Canna lunga", desc: "Più danno per colpo.", cost: 190, damage: 3 },
       { id: "smg_mag", name: "Caricatore esteso", desc: "Più munizioni massime.", cost: 140, maxAmmo: 15 },
+      { id: "smg_rifling", name: "Canna rigata", desc: "Ancora più danno per colpo.", cost: 160, damage: 3 },
     ],
   },
   {
     id: "sniper", name: "Cecchino", desc: "Un colpo lentissimo ma devastante: quasi sempre un one-shot.",
-    cost: 850, damage: 90, cooldown: 1.4, projectileSpeed: 900, minZone: 7, maxAmmo: 8, costPerAmmo: 25,
+    cost: 850, damage: 90, cooldown: 1.4, projectileSpeed: 900, minZone: 28, maxAmmo: 8, costPerAmmo: 25,
     upgrades: [
       { id: "sniper_sight", name: "Mirino", desc: "Aggancia i bersagli con più margine.", cost: 220, aimConeBonus: 0.05 },
       { id: "sniper_stock", name: "Calcio", desc: "Cadenza di fuoco più rapida.", cost: 260, cooldownMult: 0.88 },
       { id: "sniper_barrel", name: "Canna lunga", desc: "Più danno per colpo.", cost: 300, damage: 20 },
       { id: "sniper_mag", name: "Caricatore esteso", desc: "Più munizioni massime.", cost: 200, maxAmmo: 3 },
+      { id: "sniper_rifling", name: "Canna rigata", desc: "Ancora più danno per colpo.", cost: 260, damage: 15 },
     ],
   },
   // Fires several pellets per colpo in un piccolo cono: `damage` è il danno
@@ -303,26 +381,28 @@ const RANGED_WEAPONS = [
   // a distanza i pallini si allargano e mancano più facilmente il bersaglio.
   {
     id: "shotgun", name: "Shotgun", desc: "Spara una rosa di pallini: devastante da vicino, un solo colpo per cartuccia.",
-    cost: 1300, damage: 14, cooldown: 0.9, projectileSpeed: 520, minZone: 9, maxAmmo: 20, costPerAmmo: 10,
+    cost: 1300, damage: 14, cooldown: 0.9, projectileSpeed: 520, minZone: 36, maxAmmo: 20, costPerAmmo: 10,
     pellets: 6, spread: Math.PI / 9,
     upgrades: [
       { id: "shotgun_sight", name: "Mirino", desc: "Aggancia i bersagli con più margine.", cost: 200, aimConeBonus: 0.06 },
       { id: "shotgun_stock", name: "Calcio", desc: "Cadenza di fuoco più rapida.", cost: 220, cooldownMult: 0.9 },
       { id: "shotgun_barrel", name: "Canna lunga", desc: "Più danno per pallino.", cost: 240, damage: 4 },
       { id: "shotgun_mag", name: "Caricatore esteso", desc: "Più cartucce massime.", cost: 170, maxAmmo: 6 },
+      { id: "shotgun_rifling", name: "Canna rigata", desc: "Ancora più danno per pallino.", cost: 200, damage: 3 },
     ],
   },
   // splashRadius: al contatto esplode danneggiando tutti i nemici nel raggio,
   // non solo quello colpito — vedi la gestione dedicata in Game.update().
   {
     id: "rocket", name: "Lanciarazzi", desc: "Razzo lento ma con danno ad area enorme: spazza via gruppi interi.",
-    cost: 2200, damage: 140, cooldown: 1.8, projectileSpeed: 380, minZone: 11, maxAmmo: 4, costPerAmmo: 60,
+    cost: 2200, damage: 140, cooldown: 1.8, projectileSpeed: 380, minZone: 44, maxAmmo: 4, costPerAmmo: 60,
     splashRadius: 90,
     upgrades: [
       { id: "rocket_sight", name: "Mirino", desc: "Aggancia i bersagli con più margine.", cost: 400, aimConeBonus: 0.08 },
       { id: "rocket_stock", name: "Calcio", desc: "Cadenza di fuoco più rapida.", cost: 450, cooldownMult: 0.85 },
       { id: "rocket_barrel", name: "Canna lunga", desc: "Più danno d'esplosione.", cost: 500, damage: 30 },
       { id: "rocket_mag", name: "Caricatore esteso", desc: "Più razzi massimi.", cost: 350, maxAmmo: 2 },
+      { id: "rocket_rifling", name: "Canna rigata", desc: "Ancora più danno d'esplosione.", cost: 420, damage: 25 },
     ],
   },
 ];
@@ -819,6 +899,11 @@ class Player {
     const hpBonus = lvl("firstaid") * UPGRADES.find(u => u.id === "firstaid").perLevel;
     const stealReduction = lvl("safe") * UPGRADES.find(u => u.id === "safe").perLevel;
     const doorHeal = lvl("door") * UPGRADES.find(u => u.id === "door").perLevel;
+    const bombCapacityBonus = lvl("bombCapacity") * UPGRADES.find(u => u.id === "bombCapacity").perLevel;
+    const dashCooldownReduction = clamp(lvl("dashCooldown") * UPGRADES.find(u => u.id === "dashCooldown").perLevel, 0, 0.65);
+    const moneyBonusFrac = lvl("moneyBonus") * UPGRADES.find(u => u.id === "moneyBonus").perLevel;
+    const hitInvulnBonus = lvl("hitInvuln") * UPGRADES.find(u => u.id === "hitInvuln").perLevel;
+    const meleeSpeedReduction = clamp(lvl("meleeSpeed") * UPGRADES.find(u => u.id === "meleeSpeed").perLevel, 0, 0.5);
 
     const prevMax = this.maxHp;
     this.maxHp = Math.round(cfg.baseMaxHP + hpBonus);
@@ -831,11 +916,15 @@ class Player {
       defReduction: clamp(defReduction, 0, 0.75),
       stealReduction: clamp(stealReduction, 0, 0.9),
       doorHealFraction: clamp(doorHeal, 0, 0.9),
+      bombCapacityBonus,
+      dashCooldown: cfg.dashCooldown * (1 - dashCooldownReduction),
+      moneyBonusFrac,
+      hitInvuln: cfg.hitInvuln + hitInvulnBonus,
     };
 
     const meleeWeapon = MELEE_WEAPONS[run.meleeTier || 0];
     const meleeBonus = sumWeaponUpgrades(meleeWeapon, run.meleeWeaponUpgrades);
-    const meleeCooldown = meleeWeapon.cooldown * meleeBonus.cooldownMult;
+    const meleeCooldown = meleeWeapon.cooldown * meleeBonus.cooldownMult * (1 - meleeSpeedReduction);
     this.melee = {
       id: meleeWeapon.id,
       name: meleeWeapon.name,
@@ -961,7 +1050,7 @@ class Player {
   tryDash() {
     if (this.dashCooldownTimer > 0 || this.isDashing) return;
     this.dashTimer = CONFIG.player.dashDuration;
-    this.dashCooldownTimer = CONFIG.player.dashCooldown;
+    this.dashCooldownTimer = this.stats.dashCooldown;
     this.invulnTimer = Math.max(this.invulnTimer, CONFIG.player.dashDuration + 0.1);
     SoundManager.dash();
   }
@@ -970,7 +1059,7 @@ class Player {
     if (this.isInvulnerable) return false;
     const reduced = amount * (1 - this.stats.defReduction);
     this.hp = clamp(this.hp - reduced, 0, this.maxHp);
-    this.invulnTimer = CONFIG.player.hitInvuln;
+    this.invulnTimer = this.stats.hitInvuln;
     this.hitFlash = 0.25;
     SoundManager.hitPlayer();
     return true;
@@ -2698,7 +2787,7 @@ class Game {
     if (killed) {
       SoundManager.ko();
       const [minM, maxM] = enemy.stats.moneyRange;
-      const reward = randInt(minM, maxM);
+      const reward = Math.round(randInt(minM, maxM) * (1 + this.player.stats.moneyBonusFrac));
       this.moneyThisRun += reward;
       this.run.money += reward;
       this.floatingTexts.push(new FloatingText(enemy.x, enemy.y - 34, `+${reward}€`, "#4fd07a"));
@@ -3042,12 +3131,19 @@ class Game {
   }
 
   // Consumable throwables: bought one at a time, stacked up to maxCarry.
+  // Base maxCarry plus the flat "Zaino esplosivi" house-upgrade bonus,
+  // applied uniformly to every throwable type.
+  bombCapacityFor(type) {
+    return type.maxCarry + (this.player.stats.bombCapacityBonus || 0);
+  }
+
   renderBombShop() {
     const container = document.getElementById("bomb-shop");
     container.innerHTML = "";
     THROWABLES.forEach(type => {
       const count = this.run.bombs[type.id] || 0;
-      const atCap = count >= type.maxCarry;
+      const cap = this.bombCapacityFor(type);
+      const atCap = count >= cap;
       const affordable = type.cost <= this.run.money;
       const card = document.createElement("div");
       card.className = "upgrade-card";
@@ -3055,7 +3151,7 @@ class Game {
         <h3>${type.name}</h3>
         <p>${type.desc}</p>
         <div class="row">
-          <span class="level">In tasca: ${count}/${type.maxCarry}</span>
+          <span class="level">In tasca: ${count}/${cap}</span>
           <button ${atCap || !affordable ? "disabled" : ""}>
             ${atCap ? "Scorta piena" : `Acquista — ${type.cost}€`}
           </button>
@@ -3072,7 +3168,7 @@ class Game {
     const type = THROWABLES.find(t => t.id === id);
     if (!type) return;
     const count = this.run.bombs[id] || 0;
-    if (count >= type.maxCarry || this.run.money < type.cost) return;
+    if (count >= this.bombCapacityFor(type) || this.run.money < type.cost) return;
     this.run.money -= type.cost;
     this.run.bombs[id] = count + 1;
     this.renderBombShop();
@@ -3111,7 +3207,7 @@ class Game {
     document.getElementById("wave-label").textContent = `Nemici rimasti: ${remaining}`;
     document.getElementById("money-label").textContent = `€ ${this.run.money}`;
 
-    const dashFrac = 1 - clamp(this.player.dashCooldownTimer / CONFIG.player.dashCooldown, 0, 1);
+    const dashFrac = 1 - clamp(this.player.dashCooldownTimer / this.player.stats.dashCooldown, 0, 1);
     let fill = document.querySelector("#dash-indicator .fill");
     if (!fill) {
       fill = document.createElement("div");
