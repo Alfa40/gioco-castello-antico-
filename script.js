@@ -984,18 +984,26 @@ class Player {
     if (this.invulnTimer > 0) this.invulnTimer -= dt;
     if (this.hitFlash > 0) this.hitFlash -= dt;
 
+    // True 360° direction when the input device offers one (gamepad stick,
+    // touch joystick); keyboard has no analog direction, so it falls back
+    // to the old 8-way (up/down/left/right, diagonals normalized) combo.
     let mx = 0, my = 0;
-    if (input.isDown("left")) mx -= 1;
-    if (input.isDown("right")) mx += 1;
-    if (input.isDown("up")) my -= 1;
-    if (input.isDown("down")) my += 1;
+    const analogMove = input.moveVec;
+    if (analogMove) {
+      const mag = Math.hypot(analogMove.x, analogMove.y) || 1;
+      mx = analogMove.x / mag;
+      my = analogMove.y / mag;
+    } else {
+      if (input.isDown("left")) mx -= 1;
+      if (input.isDown("right")) mx += 1;
+      if (input.isDown("up")) my -= 1;
+      if (input.isDown("down")) my += 1;
+      const len = Math.hypot(mx, my);
+      if (len > 0) { mx /= len; my /= len; }
+    }
 
     const moving = mx !== 0 || my !== 0;
-    if (moving) {
-      const len = Math.hypot(mx, my);
-      mx /= len; my /= len;
-      this.facing = Math.atan2(my, mx);
-    }
+    if (moving) this.facing = Math.atan2(my, mx);
     this.isMoving = moving;
     this.walkPhase = moving ? this.walkPhase + dt * 10 : 0;
 
@@ -1464,6 +1472,7 @@ class InputHandler {
 
     this.gamepadConnected = false;
     this.gpMove = { up: false, down: false, left: false, right: false };
+    this.gpMoveVec = null; // { x, y } continuous direction from the left stick/d-pad, or null when centered
     this.gpAim = null; // { x, y } unit vector from the right stick, or null when centered
     this.gpAttack = false;
     this.gpRanged = false;
@@ -1479,6 +1488,7 @@ class InputHandler {
     // the aim rests on a target (see Player.autoFireRanged); the right stick
     // only aims, to avoid a redundant manual-fire button on top of that.
     this.touchMove = { up: false, down: false, left: false, right: false };
+    this.touchMoveVec = null; // { x, y } continuous direction from the movement stick, or null when centered
     this.touchAim = null; // { x, y } unit vector from the aim stick, or null when centered
     this.touchDash = false;
 
@@ -1524,6 +1534,7 @@ class InputHandler {
     }
     if (!gp) {
       this.gpMove = { up: false, down: false, left: false, right: false };
+      this.gpMoveVec = null;
       this.gpAim = null;
       this.gpAttack = this.gpRanged = this.gpDash = false;
       return;
@@ -1539,6 +1550,19 @@ class InputHandler {
       up: ly < -GAMEPAD_STICK_DEADZONE || b(GAMEPAD_BUTTONS.dpadUp),
       down: ly > GAMEPAD_STICK_DEADZONE || b(GAMEPAD_BUTTONS.dpadDown),
     };
+
+    // Continuous direction for true 360° movement: the analog stick wins
+    // when tilted past the deadzone; the d-pad (digital, 8-way) is only a
+    // fallback for controllers/players who prefer it.
+    const stickMag = Math.hypot(lx, ly);
+    if (stickMag > GAMEPAD_STICK_DEADZONE) {
+      this.gpMoveVec = { x: lx / stickMag, y: ly / stickMag };
+    } else {
+      const dx = (this.gpMove.right ? 1 : 0) - (this.gpMove.left ? 1 : 0);
+      const dy = (this.gpMove.down ? 1 : 0) - (this.gpMove.up ? 1 : 0);
+      const dpadMag = Math.hypot(dx, dy);
+      this.gpMoveVec = dpadMag > 0 ? { x: dx / dpadMag, y: dy / dpadMag } : null;
+    }
 
     // Right stick steers where the player looks/aims, independent of movement.
     const rx = gp.axes[2] || 0;
@@ -1564,6 +1588,12 @@ class InputHandler {
   }
 
   isDown(dir) { return this.keys.has(dir) || this.gpMove[dir] || this.touchMove[dir]; }
+
+  // Continuous 360° movement direction, when the active input device
+  // supports one (gamepad stick or touch joystick) — see Player.update(),
+  // which falls back to the digital 8-way isDown() combination otherwise
+  // (keyboard has no analog direction to offer).
+  get moveVec() { return this.gpMoveVec || this.touchMoveVec || null; }
 }
 
 // Input-shaped adapter fed by messages from the remote peer, so
@@ -1572,6 +1602,7 @@ class InputHandler {
 class RemoteInputState {
   constructor() {
     this.moveState = { up: false, down: false, left: false, right: false };
+    this.moveVec = null; // { x, y } continuous direction, or null (keyboard-only guest)
     this.aim = null; // { x, y } unit vector, or null when centered
   }
   isDown(dir) { return !!this.moveState[dir]; }
@@ -1980,16 +2011,22 @@ class Game {
       const fy = (dy / mag) * clampedFrac;
       knob.style.transform = `translate(${fx * knobTravel}px, ${fy * knobTravel}px)`;
 
-      if (Math.hypot(fx, fy) < 0.2) {
+      const knobMag = Math.hypot(fx, fy);
+      if (knobMag < 0.2) {
         this.input.touchMove = { up: false, down: false, left: false, right: false };
+        this.input.touchMoveVec = null;
       } else {
         this.input.touchMove = { left: fx < -0.3, right: fx > 0.3, up: fy < -0.3, down: fy > 0.3 };
+        // True 360° direction (unit vector) — see Player.update(), preferred
+        // over the 8-way touchMove booleans above whenever it's available.
+        this.input.touchMoveVec = { x: fx / knobMag, y: fy / knobMag };
       }
     };
     const reset = () => {
       touchId = null;
       knob.style.transform = "translate(0, 0)";
       this.input.touchMove = { up: false, down: false, left: false, right: false };
+      this.input.touchMoveVec = null;
     };
 
     base.addEventListener("touchstart", e => {
@@ -2274,6 +2311,7 @@ class Game {
     const entry = this.remotePlayers.get(msg.from);
     if (!entry) return;
     entry.input.moveState = msg.move || { up: false, down: false, left: false, right: false };
+    entry.input.moveVec = msg.moveVec || null;
     entry.input.aim = msg.aim || null;
   }
 
@@ -3117,9 +3155,10 @@ class Game {
         up: this.input.isDown("up"), down: this.input.isDown("down"),
         left: this.input.isDown("left"), right: this.input.isDown("right"),
       };
+      const moveVec = this.input.moveVec; // continuous 360° direction, or null (keyboard-only)
       const stickAim = this.input.gpAim || this.input.touchAim;
       const aim = stickAim ? { x: stickAim.x, y: stickAim.y } : null;
-      this.network.send({ type: "state", move, aim });
+      this.network.send({ type: "state", move, moveVec, aim });
     }
   }
 
