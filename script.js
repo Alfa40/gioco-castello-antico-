@@ -938,6 +938,13 @@ class Player {
 
     this.selectedThrowable = 0; // index into THROWABLES
 
+    // Every player owns their own shop economy (money, upgrades, weapon
+    // tiers, bomb inventory) — see createRunState(). Game.run is a thin
+    // alias for the local/host player's own run so all of the pre-existing
+    // single-run code keeps working unmodified; co-op purchases just target
+    // a different Player's run explicitly (see the buy* methods' `actor` arg).
+    this.run = createRunState();
+
     // Per-player run stats (kills, money earned, kills by weapon) — shown
     // on the shop's stats screen; reset alongside everything else in
     // resetForRun(). Independent of `this.stats` above, which holds
@@ -1299,6 +1306,11 @@ class Enemy {
     // crowd control from smoke/stun bombs
     this.ccTimer = 0;
     this.ccType = null; // "smoke" | "stun"
+
+    // Cumulative damage dealt by each contributing Player instance across
+    // this enemy's whole lifetime — split the kill's payout proportionally
+    // between everyone who hit it, see Game.damageEnemy().
+    this.damageBy = new Map();
   }
 
   update(dt, player, game) {
@@ -1943,9 +1955,19 @@ class Game {
       if (this.network.isGuest) { this.network.send({ type: "action", action: "dash" }); return; }
       if (this.state === "playing") this.player.tryDash();
     };
-    // Pause/shop stays host-only in this version — the guest is a thin
-    // client and doesn't manage the shared shop UI, see README.
-    this.input.onToggleMenu = () => { if (!this.network.isGuest) this.toggleUpgradeMenu(); };
+    // Every player has their own shop menu (own money/upgrades — see
+    // Game.run's getter/setter and the buy* methods' `actor` arg). A guest
+    // has no shared pause to trigger on its own, so its button only
+    // shows/hides its own view of whatever the host's current pause already
+    // put on screen — see applyGuestUIState()/guestShopHidden.
+    this.input.onToggleMenu = () => {
+      if (this.network.isGuest) {
+        this.guestShopHidden = !this.guestShopHidden;
+        this.applyGuestUIState();
+        return;
+      }
+      this.toggleUpgradeMenu();
+    };
     this.input.onThrowBomb = () => {
       if (this.network.isGuest) { this.network.send({ type: "action", action: "throwBomb" }); return; }
       if (this.state === "playing") this.throwBomb(this.player);
@@ -1955,10 +1977,15 @@ class Game {
       if (this.state === "playing") this.selectBomb(value, absolute, this.player);
     };
 
-    this.run = createRunState();
     this.player = new Player(CONFIG.width / 2, CONFIG.height / 2);
-    this.player.refreshLoadout(this.run);
+    this.player.refreshLoadout(this.player.run);
     this.player.resetForRun();
+
+    // Guest-only: whether this client has chosen to hide its own shop while
+    // the host has the shared game paused — see applyGuestUIState().
+    this.guestShopHidden = false;
+    this._wasShopActive = false;
+    this._guestShopFingerprint = null;
 
     this.enemies = [];
     this.projectiles = [];
@@ -1989,6 +2016,23 @@ class Game {
     requestAnimationFrame(this.loop);
   }
 
+  // Alias for the local/host player's own run — every pre-existing
+  // single-run reference (this.run.money, this.run = createRunState(), ...)
+  // keeps meaning exactly that, while co-op purchases explicitly target a
+  // different Player's own `.run` via the buy* methods' `actor` argument.
+  get run() { return this.player.run; }
+  set run(v) { this.player.run = v; }
+
+  // Sum of every connected player's own playerLevel (regardless of whether
+  // they're currently alive) — the party's total purchased power, used to
+  // scale enemies/grenade damage so difficulty keeps pace with the whole
+  // group's progress, not just whichever single run used to hold it.
+  get totalPlayerLevel() {
+    let total = this.player.run.playerLevel || 0;
+    for (const entry of this.remotePlayers.values()) total += entry.player.run.playerLevel || 0;
+    return total;
+  }
+
   bindUI() {
     document.getElementById("start-btn").addEventListener("click", () => {
       SoundManager.ensure();
@@ -2003,6 +2047,7 @@ class Game {
       this.startRun();
     });
     document.getElementById("upgrade-continue-btn").addEventListener("click", () => {
+      if (this.network.isGuest) { this.guestShopHidden = true; this.applyGuestUIState(); return; }
       this.closeUpgradeMenu();
     });
     document.getElementById("mute-btn").addEventListener("click", () => {
@@ -2043,9 +2088,11 @@ class Game {
   }
 
   // Home screen of the shop: this run's stats for the player currently
-  // looking at it — see Player.runStats, updated in damageEnemy().
-  renderShopStats() {
-    const stats = this.player.runStats;
+  // looking at it — see Player.runStats, updated in damageEnemy(). Also
+  // accepts the plain snapshot entry for a guest's own player (has the same
+  // `.runStats` field — see serializePlayer()).
+  renderShopStats(playerLike = this.player) {
+    const stats = playerLike.runStats;
     document.getElementById("stat-zone").textContent = this.zone;
     document.getElementById("stat-kills").textContent = stats.kills;
     document.getElementById("stat-money-earned").textContent = `${stats.moneyEarned} €`;
@@ -2168,15 +2215,15 @@ class Game {
 
     document.getElementById("touch-bomb-throw").addEventListener("touchstart", e => {
       e.preventDefault();
-      if (this.state === "playing") this.throwBomb();
+      this.input.onThrowBomb();
     }, { passive: false });
     document.getElementById("touch-bomb-select").addEventListener("touchstart", e => {
       e.preventDefault();
-      if (this.state === "playing") this.selectBomb(1, false);
+      this.input.onSelectBomb(1, false);
     }, { passive: false });
     document.getElementById("touch-pause").addEventListener("touchstart", e => {
       e.preventDefault();
-      this.toggleUpgradeMenu();
+      this.input.onToggleMenu();
     }, { passive: false });
 
     this.bindJoystick();
@@ -2395,7 +2442,7 @@ class Game {
     if (!this.network.isHost || this.remotePlayers.has(id)) return;
     const off = this.spawnOffsetFor(this.remotePlayers.size + 1);
     const player = new Player(CONFIG.width / 2 + off.x, CONFIG.height / 2 + off.y);
-    player.refreshLoadout(this.run);
+    player.refreshLoadout(player.run); // fresh run of their own, just created above
     player.resetForRun();
     const isTouchDevice = this._pendingTouchFlags.get(id) || false;
     this._pendingTouchFlags.delete(id);
@@ -2456,20 +2503,15 @@ class Game {
     return offsets[index % offsets.length];
   }
 
-  // Applies the current run's upgrades/weapons to every connected player —
-  // shared by every shop purchase handler below.
-  refreshAllLoadouts() {
-    this.player.refreshLoadout(this.run);
-    for (const entry of this.remotePlayers.values()) entry.player.refreshLoadout(this.run);
-  }
-
-  // Refreshes loadout and re-spawns every currently-connected remote player
-  // around the host's spawn point — shared by startRun()/resumeRun().
+  // Refreshes loadout (against each remote player's own run — every player
+  // has an independent economy, see createRunState()/Game.run) and re-spawns
+  // every currently-connected remote player around the host's spawn point —
+  // shared by startRun()/resumeRun().
   repositionRemotePlayers() {
     let i = 1;
     for (const entry of this.remotePlayers.values()) {
       const off = this.spawnOffsetFor(i++);
-      entry.player.refreshLoadout(this.run);
+      entry.player.refreshLoadout(entry.player.run);
       entry.player.resetForRun();
       entry.player.x = CONFIG.width / 2 + off.x;
       entry.player.y = CONFIG.height / 2 + off.y;
@@ -2514,16 +2556,35 @@ class Game {
   // edge-triggered onAttack/onDash/etc. — one message per press, cooldowns
   // inside tryAttack/tryDash/etc. already make repeats harmless).
   applyRemoteAction(msg) {
-    if (!this.network.isHost || this.state !== "playing") return;
+    if (!this.network.isHost) return;
     const entry = this.remotePlayers.get(msg.from);
     if (!entry) return;
     const rp = entry.player;
-    switch (msg.action) {
-      case "attack": rp.tryAttack(this); break;
-      case "rangedAttack": rp.tryRangedAttack(this); break;
-      case "dash": rp.tryDash(); break;
-      case "throwBomb": this.throwBomb(rp); break;
-      case "selectBomb": this.selectBomb(msg.value, msg.absolute, rp); break;
+    // Gameplay actions only while actively playing, exactly like the local
+    // player's own input handlers above.
+    if (this.state === "playing") {
+      switch (msg.action) {
+        case "attack": rp.tryAttack(this); return;
+        case "rangedAttack": rp.tryRangedAttack(this); return;
+        case "dash": rp.tryDash(); return;
+        case "throwBomb": this.throwBomb(rp); return;
+        case "selectBomb": this.selectBomb(msg.value, msg.absolute, rp); return;
+      }
+      return;
+    }
+    // Shop purchases only while the shared game is paused (mid-fight pause
+    // or the automatic zone-complete break) — each guest spends against
+    // their own run, see the buy* methods' `actor` arg.
+    if (this.state === "paused") {
+      switch (msg.action) {
+        case "buyHouseUpgrade": this.buyHouseUpgrade(msg.id, rp); return;
+        case "buyMeleeWeapon": this.buyMeleeWeapon(msg.idx, rp); return;
+        case "buyRangedWeapon": this.buyRangedWeapon(msg.idx, rp); return;
+        case "buyMeleeWeaponUpgrade": this.buyMeleeWeaponUpgrade(msg.id, rp); return;
+        case "buyRangedWeaponUpgrade": this.buyRangedWeaponUpgrade(msg.id, rp); return;
+        case "buyBomb": this.buyBomb(msg.id, rp); return;
+        case "buyAmmo": this.buyAmmo(rp); return;
+      }
     }
   }
 
@@ -2540,6 +2601,11 @@ class Game {
       hitFlash: p.hitFlash, isMoving: p.isMoving, walkPhase: p.walkPhase,
       attackActiveTimer: p.attackActiveTimer, isInvulnerable: p.isInvulnerable,
       meleeRange: p.melee && p.melee.range,
+      // Each player's own economy/shop progress and stats — every player
+      // manages their own, see Game.run's getter/setter and buy*'s `actor`
+      // arg. Every connected client receives everyone's, but only ever
+      // renders/spends its own (see applyGuestUIState()/renderGuestShop()).
+      run: p.run, runStats: p.runStats, selectedThrowable: p.selectedThrowable,
     });
     const players = [serializePlayer(this.player, this.network.myId, true)];
     for (const [id, entry] of this.remotePlayers) players.push(serializePlayer(entry.player, id, false));
@@ -2550,7 +2616,6 @@ class Game {
       zoneName: this.zoneName(this.zone),
       waveTotal: this.waveTotalEnemies,
       waveDefeated: this.waveEnemiesDefeated,
-      money: this.run.money,
       finalZone: this.zone,
       finalMoney: Math.max(0, this.moneyThisRun),
       players,
@@ -2617,9 +2682,78 @@ class Game {
       document.getElementById("restart-btn").classList.add("hidden");
     } else {
       this.setState("playing");
-      document.getElementById("mp-wait-overlay").classList.toggle("hidden", s.gameState !== "paused" && s.gameState !== "zoneComplete");
+      const shopActive = s.gameState === "paused" || s.gameState === "zoneComplete";
+      // Default to showing the shop the moment the host pauses (fresh rising
+      // edge); guestShopHidden only tracks an explicit choice to hide it
+      // while that same pause is still going on — see input.onToggleMenu.
+      if (shopActive && !this._wasShopActive) this.guestShopHidden = false;
+      this._wasShopActive = shopActive;
+      const me = s.players.find(p => p.id === this.network.myId);
+      if (shopActive && me && !this.guestShopHidden) {
+        document.getElementById("mp-wait-overlay").classList.add("hidden");
+        this.renderGuestShop(me, s.gameState);
+      } else {
+        document.getElementById("upgrade-screen").classList.add("hidden");
+        document.getElementById("mp-wait-overlay").classList.toggle("hidden", !shopActive);
+      }
       this.updateHUDFromSnapshot(s);
     }
+  }
+
+  // Sends a shop purchase to the host, which is the only one that ever
+  // actually spends a run's money — see applyRemoteAction()'s "paused"
+  // branch. Only meaningful while the host has the game paused, exactly
+  // like the local player's own buy buttons only exist inside that same
+  // upgrade-screen overlay.
+  sendBuyAction(action, payload = {}) {
+    this.network.send({ type: "action", action, ...payload });
+  }
+
+  // Guest-side equivalent of openUpgradeMenu(): same #upgrade-screen markup,
+  // populated from `me`'s own snapshot data (`me.run`/`me.runStats`) instead
+  // of the local this.run/this.player, and buy buttons that ship a network
+  // action instead of spending directly — see sendBuyAction() above and the
+  // host's applyRemoteAction(). Only the host's own continue button actually
+  // resumes/advances the zone (host-authoritative, like everything else);
+  // this one just hides the guest's own view of the pause.
+  renderGuestShop(me, gameState) {
+    const run = me.run;
+    // Always make sure it's visible (cheap, idempotent) even when the
+    // rebuild below gets skipped.
+    document.getElementById("upgrade-screen").classList.remove("hidden");
+
+    // Snapshots arrive at ~100Hz but the shop's own contents rarely change —
+    // rebuilding every list's innerHTML on every single one would needlessly
+    // detach buttons the guest is actively hovering/clicking. Skip the
+    // rebuild entirely unless something actually changed since last time.
+    const fingerprint = JSON.stringify([run, me.ammo, me.rangedName, gameState, this.activeShopSection]);
+    if (this._guestShopFingerprint === fingerprint) return;
+    this._guestShopFingerprint = fingerprint;
+
+    const title = document.getElementById("upgrade-title");
+    const subtitle = document.getElementById("upgrade-subtitle");
+    const btn = document.getElementById("upgrade-continue-btn");
+    if (gameState === "zoneComplete") {
+      title.textContent = `Zona ${this.zone} completata!`;
+      subtitle.textContent = "Spendi i tuoi soldi, poi attendi che l'host continui.";
+    } else {
+      title.textContent = "Pausa — Potenzia il tuo personaggio";
+      subtitle.textContent = "In attesa che l'host riprenda la partita.";
+    }
+    btn.textContent = "Nascondi";
+    this.renderShopStats(me);
+    this.applyShopSectionVisibility();
+    this.renderUpgradeList(run, id => this.sendBuyAction("buyHouseUpgrade", { id }));
+    this.renderWeaponList("melee-weapon-list", MELEE_WEAPONS, run.meleeTier, run.meleeWeaponUpgrades, idx => this.sendBuyAction("buyMeleeWeapon", { idx }), run);
+    this.renderWeaponUpgrades("melee-weapon-upgrades-section", "melee-weapon-upgrades", MELEE_WEAPONS, run.meleeTier, run.meleeWeaponUpgrades, id => this.sendBuyAction("buyMeleeWeaponUpgrade", { id }), run);
+    this.renderWeaponList("ranged-weapon-list", RANGED_WEAPONS, run.rangedTier, run.rangedWeaponUpgrades, idx => this.sendBuyAction("buyRangedWeapon", { idx }), run);
+    if (run.rangedTier >= 0) {
+      this.renderWeaponUpgrades("ranged-weapon-upgrades-section", "ranged-weapon-upgrades", RANGED_WEAPONS, run.rangedTier, run.rangedWeaponUpgrades, id => this.sendBuyAction("buyRangedWeaponUpgrade", { id }), run);
+    } else {
+      document.getElementById("ranged-weapon-upgrades-section").classList.add("hidden");
+    }
+    this.renderAmmoShop({ ranged: !!me.rangedName, ammo: me.ammo, run }, () => this.sendBuyAction("buyAmmo"));
+    this.renderBombShop(run, id => this.sendBuyAction("buyBomb", { id }));
   }
 
   // Raw snapshot fields only (flat meleeName/rangedName/ammo, not the
@@ -2636,10 +2770,14 @@ class Game {
         ? `${me.meleeName} · ${me.rangedName} (${me.ammo}/${me.maxAmmo})`
         : me.meleeName;
       document.getElementById("aim-stick-base").classList.toggle("hidden", !me.rangedName);
+      // Own money/bomb inventory, not a party-wide figure — see me.run.
+      document.getElementById("money-label").textContent = `€ ${me.run.money}`;
+      const bombType = THROWABLES[me.selectedThrowable || 0];
+      const bombCount = me.run.bombs[bombType.id] || 0;
+      document.getElementById("bomb-label").textContent = `${bombType.name} x${bombCount}`;
     }
     document.getElementById("zone-label").textContent = `Zona ${s.zone} — ${s.zoneName}`;
     document.getElementById("wave-label").textContent = `Nemici rimasti: ${Math.max(0, s.waveTotal - s.waveDefeated)}`;
-    document.getElementById("money-label").textContent = `€ ${s.money}`;
   }
 
   lerp(a, b, t) { return a + (b - a) * t; }
@@ -2725,8 +2863,8 @@ class Game {
     const z = zone - 1;
     const sc = CONFIG.zoneScaling;
     // Player level grows as upgrades/weapons get bought — a slow extra HP/damage
-    // tax so a fully-kitted-out player doesn't make the run trivially easy.
-    const lvl = this.run.playerLevel || 0;
+    // tax so a fully-kitted-out party doesn't make the run trivially easy.
+    const lvl = this.totalPlayerLevel;
     const levelHpMult = 1 + sc.hpPerPlayerLevel * lvl;
     const levelDamageMult = 1 + sc.damagePerPlayerLevel * lvl;
     return {
@@ -2752,6 +2890,10 @@ class Game {
     this.player.resetForRun();
     this.player.x = CONFIG.width / 2;
     this.player.y = CONFIG.height / 2;
+    // A fresh run means a fresh economy for every connected player, not just
+    // the host — repositionRemotePlayers() below only re-derives loadouts
+    // from whatever run each of them already has.
+    for (const entry of this.remotePlayers.values()) entry.player.run = createRunState();
     this.repositionRemotePlayers();
     this.zone = 1;
     this.moneyThisRun = 0;
@@ -2838,7 +2980,7 @@ class Game {
   grenadeDamageForZone() {
     const sc = CONFIG.zoneScaling;
     const z = this.zone - 1;
-    const lvl = this.run.playerLevel || 0;
+    const lvl = this.totalPlayerLevel;
     const levelHpMult = 1 + sc.hpPerPlayerLevel * lvl;
     const balordoHpMult = ENEMY_TYPES.find(t => t.id === "balordo").hpMult;
     const baseHpAtZone = CONFIG.enemy.baseMaxHP * (1 + sc.hpPerZone * z) * balordoHpMult * levelHpMult;
@@ -2933,20 +3075,35 @@ class Game {
   damageEnemy(enemy, amount, source = null, weaponId = null) {
     const killed = enemy.takeDamage(amount);
     this.floatingTexts.push(new FloatingText(enemy.x, enemy.y - 20, `-${Math.round(amount)}`, "#ffffff"));
+    if (source) enemy.damageBy.set(source, (enemy.damageBy.get(source) || 0) + amount);
     if (killed) {
       SoundManager.ko();
       const [minM, maxM] = enemy.stats.moneyRange;
-      const moneyBonusFrac = (source || this.player).stats.moneyBonusFrac;
-      const reward = Math.round(randInt(minM, maxM) * (1 + moneyBonusFrac));
-      this.moneyThisRun += reward;
-      this.run.money += reward;
-      this.floatingTexts.push(new FloatingText(enemy.x, enemy.y - 34, `+${reward}€`, "#4fd07a"));
+      const baseReward = randInt(minM, maxM);
+      // Co-op payout: split proportionally to each player's own share of the
+      // total damage this enemy took over its whole lifetime, not just
+      // whoever landed the killing blow — see damageBy above. Falls back to
+      // whoever (or `this.player`, in solo) actually dealt this final hit
+      // if nothing was ever tracked (e.g. it died to a single instant-kill
+      // hit that arrives here with no accumulated history yet).
+      const contributors = enemy.damageBy.size > 0 ? enemy.damageBy : new Map([[source || this.player, amount]]);
+      const totalDamage = [...contributors.values()].reduce((a, b) => a + b, 0);
+      let totalPaid = 0;
+      for (const [player, dmg] of contributors) {
+        const share = dmg / totalDamage;
+        const reward = Math.round(baseReward * share * (1 + player.stats.moneyBonusFrac));
+        if (reward <= 0) continue;
+        player.run.money += reward;
+        player.runStats.moneyEarned += reward;
+        totalPaid += reward;
+      }
+      this.moneyThisRun += totalPaid;
+      this.floatingTexts.push(new FloatingText(enemy.x, enemy.y - 34, `+${totalPaid}€`, "#4fd07a"));
       this.waveEnemiesDefeated++;
       SoundManager.coin();
       this.rollPickupDrop(enemy);
       if (source) {
         source.runStats.kills++;
-        source.runStats.moneyEarned += reward;
         if (weaponId) source.runStats.killsByWeapon[weaponId] = (source.runStats.killsByWeapon[weaponId] || 0) + 1;
       }
     } else {
@@ -3000,15 +3157,17 @@ class Game {
   }
 
   // `actor` is whichever player actually took the hit — see the call site
-  // in update(). The stolen money still comes out of the shared run purse.
+  // in update(). The stolen money comes out of that player's own purse, now
+  // that money is per-player rather than a shared run.
   onPlayerHit(actor = this.player) {
-    if (this.run.money <= 0) return;
+    const run = actor.run;
+    if (run.money <= 0) return;
     const stealFrac = 0.05;
     const reduction = actor.stats.stealReduction;
-    let stolen = Math.round(this.run.money * stealFrac * (1 - reduction));
-    stolen = Math.min(stolen, this.run.money);
+    let stolen = Math.round(run.money * stealFrac * (1 - reduction));
+    stolen = Math.min(stolen, run.money);
     if (stolen > 0) {
-      this.run.money -= stolen;
+      run.money -= stolen;
       this.moneyThisRun -= Math.min(stolen, Math.max(0, this.moneyThisRun));
       this.floatingTexts.push(new FloatingText(actor.x, actor.y - 26, `-${stolen}€ rubati!`, "#d9455f"));
     }
@@ -3042,10 +3201,10 @@ class Game {
     this.applyShopSectionVisibility();
     this.renderUpgradeList();
     this.renderWeaponList("melee-weapon-list", MELEE_WEAPONS, this.run.meleeTier, this.run.meleeWeaponUpgrades, (idx) => this.buyMeleeWeapon(idx));
-    this.renderWeaponUpgrades("melee-weapon-upgrades-section", "melee-weapon-upgrades", MELEE_WEAPONS, this.run.meleeTier, this.run.meleeWeaponUpgrades, (id, cost) => this.buyMeleeWeaponUpgrade(id, cost));
+    this.renderWeaponUpgrades("melee-weapon-upgrades-section", "melee-weapon-upgrades", MELEE_WEAPONS, this.run.meleeTier, this.run.meleeWeaponUpgrades, (id) => this.buyMeleeWeaponUpgrade(id));
     this.renderWeaponList("ranged-weapon-list", RANGED_WEAPONS, this.run.rangedTier, this.run.rangedWeaponUpgrades, (idx) => this.buyRangedWeapon(idx));
     if (this.run.rangedTier >= 0) {
-      this.renderWeaponUpgrades("ranged-weapon-upgrades-section", "ranged-weapon-upgrades", RANGED_WEAPONS, this.run.rangedTier, this.run.rangedWeaponUpgrades, (id, cost) => this.buyRangedWeaponUpgrade(id, cost));
+      this.renderWeaponUpgrades("ranged-weapon-upgrades-section", "ranged-weapon-upgrades", RANGED_WEAPONS, this.run.rangedTier, this.run.rangedWeaponUpgrades, (id) => this.buyRangedWeaponUpgrade(id));
     } else {
       document.getElementById("ranged-weapon-upgrades-section").classList.add("hidden");
     }
@@ -3069,11 +3228,15 @@ class Game {
     return Math.round(upg.baseCost * Math.pow(upg.growth, level));
   }
 
-  renderUpgradeList() {
+  // `run` defaults to the local/host player's own run for the existing
+  // solo/host flow; a guest's shop passes its own run mirror instead and
+  // `onBuy` sends a network action rather than buying directly — see
+  // renderGuestShop().
+  renderUpgradeList(run = this.run, onBuy = null) {
     const list = document.getElementById("upgrade-list");
     list.innerHTML = "";
     UPGRADES.forEach(upg => {
-      const level = this.run.upgrades[upg.id] || 0;
+      const level = run.upgrades[upg.id] || 0;
       const maxed = level >= upg.maxLevel;
       const cost = maxed ? null : this.costFor(upg, level);
 
@@ -3084,43 +3247,59 @@ class Game {
         <p>${upg.desc}</p>
         <div class="row">
           <span class="level">Lv. ${level}/${upg.maxLevel}</span>
-          <button ${maxed || cost > this.run.money ? "disabled" : ""}>
+          <button ${maxed || cost > run.money ? "disabled" : ""}>
             ${maxed ? "MAX" : `Acquista — ${cost}€`}
           </button>
         </div>
       `;
       if (!maxed) {
         card.querySelector("button").addEventListener("click", () => {
-          if (this.run.money >= cost) {
-            this.run.money -= cost;
-            this.run.upgrades[upg.id] = level + 1;
-            this.run.playerLevel++;
-            this.refreshAllLoadouts();
-            if (upg.id === "firstaid") {
-              // Buying more max HP also tops every player up to at least 3/4
-              // of the new max, instead of just preserving whatever HP was
-              // missing before the purchase (refreshLoadout's default) —
-              // never reduces current HP if it's already higher than that.
-              this.player.hp = Math.max(this.player.hp, Math.round(this.player.maxHp * 0.75));
-              for (const entry of this.remotePlayers.values()) {
-                entry.player.hp = Math.max(entry.player.hp, Math.round(entry.player.maxHp * 0.75));
-              }
-            }
-            this.renderUpgradeList();
-            this.updateHUDStatic();
+          if (run.money >= cost) {
+            if (onBuy) onBuy(upg.id);
+            else this.buyHouseUpgrade(upg.id);
           }
         });
       }
       list.appendChild(card);
     });
-    document.getElementById("upgrade-money").textContent = `€ ${this.run.money}`;
+    document.getElementById("upgrade-money").textContent = `€ ${run.money}`;
+  }
+
+  // House upgrades are individually owned per player — each character's own
+  // life/shield/speed/etc, exactly like their weapons. `actor` is whichever
+  // Player this purchase applies to (defaults to the local/host player;
+  // a guest's purchase supplies their own remotePlayers entry instead — see
+  // applyRemoteAction()).
+  buyHouseUpgrade(id, actor = this.player) {
+    const run = actor.run;
+    const upg = UPGRADES.find(u => u.id === id);
+    const level = run.upgrades[id] || 0;
+    if (!upg || level >= upg.maxLevel) return;
+    const cost = this.costFor(upg, level);
+    if (run.money < cost) return;
+    run.money -= cost;
+    run.upgrades[id] = level + 1;
+    run.playerLevel++;
+    actor.refreshLoadout(run);
+    if (id === "firstaid") {
+      // Buying more max HP also tops the buyer up to at least 3/4 of the new
+      // max, instead of just preserving whatever HP was missing before the
+      // purchase (refreshLoadout's default) — never reduces current HP if
+      // it's already higher than that. Only the buyer, now that HP/upgrades
+      // are per-player instead of shared across the whole party.
+      actor.hp = Math.max(actor.hp, Math.round(actor.maxHp * 0.75));
+    }
+    if (actor === this.player) {
+      this.renderUpgradeList();
+      this.updateHUDStatic();
+    }
   }
 
   // Shared renderer for the sequential melee/ranged weapon tracks: only the
   // next tier is ever purchasable, earlier tiers show as owned, later ones
   // as locked (behind a minimum zone reached this run, or behind fully
   // upgrading the weapon currently in hand).
-  renderWeaponList(containerId, weapons, currentTier, ownedUpgradeIds, onBuy) {
+  renderWeaponList(containerId, weapons, currentTier, ownedUpgradeIds, onBuy, run = this.run) {
     const list = document.getElementById(containerId);
     list.innerHTML = "";
     weapons.forEach((weapon, idx) => {
@@ -3142,7 +3321,7 @@ class Game {
       } else if (zoneLocked) {
         statusHtml = `<span class="level">Bloccata</span><button disabled>Si sblocca alla zona ${weapon.minZone}</button>`;
       } else {
-        const affordable = weapon.cost <= this.run.money;
+        const affordable = weapon.cost <= run.money;
         statusHtml = `<span class="level">&nbsp;</span><button ${affordable ? "" : "disabled"}>Acquista — ${weapon.cost}€</button>`;
       }
 
@@ -3157,7 +3336,7 @@ class Game {
   // Per-tier weapon upgrades (grip/blade/spikes/scope/stock/barrel/mag...),
   // shown for whichever tier is currently equipped. Buying every upgrade
   // here is what unlocks the next weapon tier in the list above.
-  renderWeaponUpgrades(sectionId, containerId, weapons, currentTier, ownedUpgradeIds, onBuyUpgrade) {
+  renderWeaponUpgrades(sectionId, containerId, weapons, currentTier, ownedUpgradeIds, onBuyUpgrade, run = this.run) {
     const weapon = weapons[currentTier];
     const section = document.getElementById(sectionId);
     const container = document.getElementById(containerId);
@@ -3173,7 +3352,7 @@ class Game {
     container.innerHTML = "";
     weapon.upgrades.forEach(upg => {
       const isOwned = owned.has(upg.id);
-      const affordable = upg.cost <= this.run.money;
+      const affordable = upg.cost <= run.money;
       const card = document.createElement("div");
       card.className = "upgrade-card";
       card.innerHTML = `
@@ -3185,74 +3364,98 @@ class Game {
         </div>
       `;
       if (!isOwned) {
-        card.querySelector("button").addEventListener("click", () => onBuyUpgrade(upg.id, upg.cost));
+        card.querySelector("button").addEventListener("click", () => onBuyUpgrade(upg.id));
       }
       container.appendChild(card);
     });
   }
 
-  buyMeleeWeapon(idx) {
+  // Every buy* method below takes an explicit `actor` (defaulting to the
+  // local/host player) so the exact same purchase logic runs whether it's
+  // triggered locally or on behalf of a connected guest — see
+  // applyRemoteAction(). Costs are always re-derived from the static weapon
+  // tables by id/idx, never trusted from the caller, so there's nothing a
+  // guest's client could misreport to buy something cheaper.
+  buyMeleeWeapon(idx, actor = this.player) {
+    const run = actor.run;
     const weapon = MELEE_WEAPONS[idx];
-    const current = MELEE_WEAPONS[this.run.meleeTier];
-    if (idx !== this.run.meleeTier + 1 || this.run.money < weapon.cost) return;
-    if (!allWeaponUpgradesOwned(current, this.run.meleeWeaponUpgrades)) return;
-    this.run.money -= weapon.cost;
-    this.run.meleeTier = idx;
-    this.run.playerLevel++;
-    this.refreshAllLoadouts();
-    this.openUpgradeMenu(this.menuMode);
-    this.updateHUDStatic();
-  }
-
-  buyRangedWeapon(idx) {
-    const weapon = RANGED_WEAPONS[idx];
-    if (idx !== this.run.rangedTier + 1 || this.run.money < weapon.cost) return;
-    if (weapon.minZone && this.zone < weapon.minZone) return;
-    if (this.run.rangedTier >= 0) {
-      const current = RANGED_WEAPONS[this.run.rangedTier];
-      if (!allWeaponUpgradesOwned(current, this.run.rangedWeaponUpgrades)) return;
+    const current = MELEE_WEAPONS[run.meleeTier];
+    if (idx !== run.meleeTier + 1 || run.money < weapon.cost) return;
+    if (!allWeaponUpgradesOwned(current, run.meleeWeaponUpgrades)) return;
+    run.money -= weapon.cost;
+    run.meleeTier = idx;
+    run.playerLevel++;
+    actor.refreshLoadout(run);
+    if (actor === this.player) {
+      this.openUpgradeMenu(this.menuMode);
+      this.updateHUDStatic();
     }
-    this.run.money -= weapon.cost;
-    this.run.rangedTier = idx;
-    this.run.playerLevel++;
-    this.refreshAllLoadouts();
-    this.openUpgradeMenu(this.menuMode);
-    this.updateHUDStatic();
   }
 
-  buyMeleeWeaponUpgrade(id, cost) {
-    if (this.run.meleeWeaponUpgrades.includes(id) || this.run.money < cost) return;
-    this.run.money -= cost;
-    this.run.meleeWeaponUpgrades.push(id);
-    this.run.playerLevel++;
-    this.refreshAllLoadouts();
-    this.openUpgradeMenu(this.menuMode);
-    this.updateHUDStatic();
+  buyRangedWeapon(idx, actor = this.player) {
+    const run = actor.run;
+    const weapon = RANGED_WEAPONS[idx];
+    if (idx !== run.rangedTier + 1 || run.money < weapon.cost) return;
+    if (weapon.minZone && this.zone < weapon.minZone) return;
+    if (run.rangedTier >= 0) {
+      const current = RANGED_WEAPONS[run.rangedTier];
+      if (!allWeaponUpgradesOwned(current, run.rangedWeaponUpgrades)) return;
+    }
+    run.money -= weapon.cost;
+    run.rangedTier = idx;
+    run.playerLevel++;
+    actor.refreshLoadout(run);
+    if (actor === this.player) {
+      this.openUpgradeMenu(this.menuMode);
+      this.updateHUDStatic();
+    }
   }
 
-  buyRangedWeaponUpgrade(id, cost) {
-    if (this.run.rangedWeaponUpgrades.includes(id) || this.run.money < cost) return;
-    this.run.money -= cost;
-    this.run.rangedWeaponUpgrades.push(id);
-    this.run.playerLevel++;
-    this.refreshAllLoadouts();
-    this.openUpgradeMenu(this.menuMode);
-    this.updateHUDStatic();
+  buyMeleeWeaponUpgrade(id, actor = this.player) {
+    const run = actor.run;
+    const weapon = MELEE_WEAPONS[run.meleeTier];
+    const upg = weapon.upgrades && weapon.upgrades.find(u => u.id === id);
+    if (!upg || run.meleeWeaponUpgrades.includes(id) || run.money < upg.cost) return;
+    run.money -= upg.cost;
+    run.meleeWeaponUpgrades.push(id);
+    run.playerLevel++;
+    actor.refreshLoadout(run);
+    if (actor === this.player) {
+      this.openUpgradeMenu(this.menuMode);
+      this.updateHUDStatic();
+    }
+  }
+
+  buyRangedWeaponUpgrade(id, actor = this.player) {
+    const run = actor.run;
+    const weapon = RANGED_WEAPONS[run.rangedTier];
+    const upg = weapon && weapon.upgrades && weapon.upgrades.find(u => u.id === id);
+    if (!upg || run.rangedWeaponUpgrades.includes(id) || run.money < upg.cost) return;
+    run.money -= upg.cost;
+    run.rangedWeaponUpgrades.push(id);
+    run.playerLevel++;
+    actor.refreshLoadout(run);
+    if (actor === this.player) {
+      this.openUpgradeMenu(this.menuMode);
+      this.updateHUDStatic();
+    }
   }
 
   // Ammo is a separate consumable purchase (not a permanent tier): refills
   // the equipped gun's pool by a fixed chunk, capped at its max capacity.
-  renderAmmoShop() {
+  // `playerLike` only needs `.ranged`/`.ammo`/`.run` — a guest's own snapshot
+  // entry is adapted into that same shape by renderGuestShop().
+  renderAmmoShop(playerLike = this.player, onBuy = () => this.buyAmmo()) {
     const section = document.getElementById("ammo-shop-section");
     const container = document.getElementById("ammo-shop");
-    if (!this.player.ranged) {
+    if (!playerLike.ranged) {
       section.classList.add("hidden");
       return;
     }
     section.classList.remove("hidden");
-    const weapon = RANGED_WEAPONS[this.run.rangedTier];
+    const weapon = RANGED_WEAPONS[playerLike.run.rangedTier];
     const cap = weapon.maxAmmo;
-    const current = this.player.ammo;
+    const current = playerLike.ammo;
     const chunk = Math.min(10, cap - current);
     const cost = Math.ceil(chunk * weapon.costPerAmmo);
 
@@ -3264,45 +3467,51 @@ class Game {
       <p>Scorta attuale: ${current}/${cap}</p>
       <div class="row">
         <span class="level">&nbsp;</span>
-        <button ${chunk <= 0 || cost > this.run.money ? "disabled" : ""}>
+        <button ${chunk <= 0 || cost > playerLike.run.money ? "disabled" : ""}>
           ${chunk <= 0 ? "Scorta piena" : `Rifornisci +${chunk} — ${cost}€`}
         </button>
       </div>
     `;
     if (chunk > 0) {
-      card.querySelector("button").addEventListener("click", () => this.buyAmmo());
+      card.querySelector("button").addEventListener("click", () => onBuy());
     }
     container.appendChild(card);
   }
 
-  buyAmmo() {
-    if (!this.player.ranged) return;
-    const weapon = RANGED_WEAPONS[this.run.rangedTier];
-    const chunk = Math.min(10, weapon.maxAmmo - this.player.ammo);
+  buyAmmo(actor = this.player) {
+    if (!actor.ranged) return;
+    const run = actor.run;
+    const weapon = RANGED_WEAPONS[run.rangedTier];
+    const chunk = Math.min(10, weapon.maxAmmo - actor.ammo);
     if (chunk <= 0) return;
     const cost = Math.ceil(chunk * weapon.costPerAmmo);
-    if (this.run.money < cost) return;
-    this.run.money -= cost;
-    this.player.ammo += chunk;
-    this.renderAmmoShop();
-    this.updateHUDStatic();
+    if (run.money < cost) return;
+    run.money -= cost;
+    actor.ammo += chunk;
+    if (actor === this.player) {
+      this.renderAmmoShop();
+      this.updateHUDStatic();
+    }
   }
 
   // Consumable throwables: bought one at a time, stacked up to maxCarry.
   // Base maxCarry plus the flat "Zaino esplosivi" house-upgrade bonus,
-  // applied uniformly to every throwable type.
-  bombCapacityFor(type) {
-    return type.maxCarry + (this.player.stats.bombCapacityBonus || 0);
+  // re-derived straight from `run.upgrades` rather than `player.stats` so it
+  // works identically for a guest's own run mirror.
+  bombCapacityFor(type, run = this.run) {
+    const lvl = run.upgrades.bombCapacity || 0;
+    const bonus = lvl * UPGRADES.find(u => u.id === "bombCapacity").perLevel;
+    return type.maxCarry + bonus;
   }
 
-  renderBombShop() {
+  renderBombShop(run = this.run, onBuy = id => this.buyBomb(id)) {
     const container = document.getElementById("bomb-shop");
     container.innerHTML = "";
     THROWABLES.forEach(type => {
-      const count = this.run.bombs[type.id] || 0;
-      const cap = this.bombCapacityFor(type);
+      const count = run.bombs[type.id] || 0;
+      const cap = this.bombCapacityFor(type, run);
       const atCap = count >= cap;
-      const affordable = type.cost <= this.run.money;
+      const affordable = type.cost <= run.money;
       const card = document.createElement("div");
       card.className = "upgrade-card";
       card.innerHTML = `
@@ -3316,21 +3525,24 @@ class Game {
         </div>
       `;
       if (!atCap) {
-        card.querySelector("button").addEventListener("click", () => this.buyBomb(type.id));
+        card.querySelector("button").addEventListener("click", () => onBuy(type.id));
       }
       container.appendChild(card);
     });
   }
 
-  buyBomb(id) {
+  buyBomb(id, actor = this.player) {
+    const run = actor.run;
     const type = THROWABLES.find(t => t.id === id);
     if (!type) return;
-    const count = this.run.bombs[id] || 0;
-    if (count >= this.bombCapacityFor(type) || this.run.money < type.cost) return;
-    this.run.money -= type.cost;
-    this.run.bombs[id] = count + 1;
-    this.renderBombShop();
-    this.updateHUDStatic();
+    const count = run.bombs[id] || 0;
+    if (count >= this.bombCapacityFor(type, run) || run.money < type.cost) return;
+    run.money -= type.cost;
+    run.bombs[id] = count + 1;
+    if (actor === this.player) {
+      this.renderBombShop();
+      this.updateHUDStatic();
+    }
   }
 
   setState(state) {
