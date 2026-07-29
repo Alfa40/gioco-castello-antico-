@@ -407,19 +407,31 @@ const RANGED_WEAPONS = [
   },
 ];
 
-// Consumable throwables, bought in stacks (not sequential tiers) and thrown
-// along the current aim. Expensive on purpose — a panic button, not a main weapon.
+// Consumable throwables, bought in stacks (not sequential tiers). Most land
+// at a fixed point along the aim direction and detonate there (see
+// Game.throwBomb / class Bomb) — knife and shuriken are the exception,
+// flagged `isProjectileThrow`: those actually fly like a bullet (see
+// Game.throwBomb's projectile branch and class Projectile's instaKill/homing).
 const THROWABLES = [
-  { id: "grenade", name: "Granata", desc: "Esplosione che infligge danno pesante in un'area.", cost: 1200, kind: "damage", radius: 70, damage: 70, fuse: 1.1, maxCarry: 5 },
-  { id: "molotov", name: "Molotov", desc: "Crea una pozza di fuoco che brucia i nemici per qualche secondo.", cost: 1300, kind: "fire", radius: 60, damagePerSecond: 22, duration: 3.5, fuse: 0.6, maxCarry: 5 },
+  // damage: a placeholder baseline — the thrown amount is actually computed
+  // per-zone at throw time (see Game.grenadeDamageForZone) so it reliably
+  // one-shots "base" enemies without ever one-shotting the tankier Bruto,
+  // at any zone.
+  { id: "grenade", name: "Granata", desc: "Esplosione che infligge danno pesante in un'area: uccide i nemici base, ma non il Bruto.", cost: 600, kind: "damage", radius: 75, damage: 70, fuse: 1.1, maxCarry: 5 },
+  { id: "molotov", name: "Molotov", desc: "Crea una pozza di fuoco che brucia chiunque ci passi sopra per qualche secondo.", cost: 700, kind: "fire", radius: 100, damagePerSecond: 22, duration: 5, fuse: 0.6, maxCarry: 5 },
   { id: "sticky", name: "Bomba adesiva", desc: "Si attacca al primo nemico colpito ed esplode con danno enorme.", cost: 1500, kind: "damage", radius: 55, damage: 130, fuse: 1.4, maxCarry: 4, sticky: true },
-  { id: "smoke", name: "Granata fumogena", desc: "Acceca i nemici nella zona: smettono di inseguirti per qualche secondo.", cost: 1250, kind: "cc", ccType: "smoke", radius: 100, duration: 4, fuse: 0.5, maxCarry: 4 },
-  { id: "flashbang", name: "Granata stordente", desc: "Stordisce i nemici vicini, bloccandoli sul posto per qualche secondo.", cost: 1350, kind: "cc", ccType: "stun", radius: 110, duration: 2.5, fuse: 0.4, maxCarry: 4 },
-  { id: "throwknife", name: "Coltello da lancio", desc: "Lama leggera, colpisce quasi all'istante ma fa meno danno di una granata.", cost: 1000, kind: "damage", radius: 30, damage: 45, fuse: 0.12, maxCarry: 8 },
-  { id: "shuriken", name: "Shuriken", desc: "Lama piccola e velocissima, perfetta per liberarti in fretta di un nemico isolato.", cost: 1050, kind: "damage", radius: 26, damage: 40, fuse: 0.08, maxCarry: 10 },
+  // blindRadius: distanza da un giocatore entro cui un nemico "accecato"
+  // continua comunque a comportarsi normalmente (troppo vicino per perdersi
+  // nel fumo) — vedi Enemy.update()'s ccType === "smoke" branch.
+  { id: "smoke", name: "Granata fumogena", desc: "Acceca i nemici nella nube: chi non è a un passo da un giocatore vaga a caso invece di inseguire.", cost: 650, kind: "cc", ccType: "smoke", radius: 150, blindRadius: 10, duration: 4, fuse: 0.5, maxCarry: 4 },
+  { id: "flashbang", name: "Granata stordente", desc: "Stordisce i nemici vicini, bloccando ogni loro movimento per qualche secondo.", cost: 800, kind: "cc", ccType: "stun", radius: 75, duration: 2.5, fuse: 0.4, maxCarry: 4 },
+  { id: "throwknife", name: "Coltello da lancio", desc: "Vola dritto e uccide all'istante il primo nemico che colpisce.", cost: 200, kind: "damage", isProjectileThrow: true, instaKill: true, projectileSpeed: 700, maxCarry: 8 },
+  { id: "shuriken", name: "Shuriken", desc: "Vola veloce e insegue leggermente il nemico più vicino alla sua traiettoria.", cost: 500, kind: "damage", isProjectileThrow: true, homing: true, projectileSpeed: 560, damage: 40, maxCarry: 10 },
 ];
 const THROW_RANGE = 260;
 const THROW_CONE = Math.PI / 6;
+const HOMING_TURN_RATE = 2.2; // max radians/second a homing projectile can curve — "insegue leggermente", not a lock-on
+const SMOKE_BLIND_RADIUS = THROWABLES.find(t => t.id === "smoke").blindRadius; // cached once — see Enemy.update()'s ccType === "smoke" branch
 
 // Three enemy archetypes with distinct movement/attack behavior, not just
 // stat multipliers, so they read as different threats at a glance.
@@ -681,7 +693,7 @@ class FloatingText {
    PROJECTILE (fired by ranged weapons)
 ========================================================= */
 class Projectile {
-  constructor(x, y, angle, speed, damage, owner = "player", splashRadius = 0, shooter = null, weaponId = null) {
+  constructor(x, y, angle, speed, damage, owner = "player", splashRadius = 0, shooter = null, weaponId = null, instaKill = false, homing = false) {
     this.id = nextEntityId();
     this.x = x;
     this.y = y;
@@ -694,8 +706,37 @@ class Projectile {
     this.dead = false;
     this.shooter = shooter; // Player instance that fired it, for per-player kill/weapon stats
     this.weaponId = weaponId;
+    this.instaKill = instaKill; // thrown knife: kills whatever it touches outright, see the collision handling in Game.update()
+    this.homing = homing; // shuriken: curves gently toward the nearest enemy ahead of it, see update() below
   }
-  update(dt) {
+  update(dt, enemies) {
+    if (this.homing && enemies && enemies.length) {
+      const speed = Math.hypot(this.vx, this.vy) || 1;
+      const dirX = this.vx / speed, dirY = this.vy / speed;
+      // "Nemico più vicino alla traiettoria": among enemies still ahead of
+      // the projectile, the one with the smallest perpendicular distance to
+      // its current flight line — not simply the closest one overall.
+      let best = null, bestPerp = Infinity;
+      for (const e of enemies) {
+        if (e.dead) continue;
+        const ex = e.x - this.x, ey = e.y - this.y;
+        const along = ex * dirX + ey * dirY;
+        if (along <= 0) continue;
+        const perp = Math.abs(ex * dirY - ey * dirX);
+        if (perp < bestPerp) { bestPerp = perp; best = e; }
+      }
+      if (best) {
+        const desired = Math.atan2(best.y - this.y, best.x - this.x);
+        const current = Math.atan2(this.vy, this.vx);
+        let diff = desired - current;
+        while (diff > Math.PI) diff -= Math.PI * 2;
+        while (diff < -Math.PI) diff += Math.PI * 2;
+        const maxTurn = HOMING_TURN_RATE * dt;
+        const turned = current + clamp(diff, -maxTurn, maxTurn);
+        this.vx = Math.cos(turned) * speed;
+        this.vy = Math.sin(turned) * speed;
+      }
+    }
     this.x += this.vx * dt;
     this.y += this.vy * dt;
     if (this.x < -20 || this.x > CONFIG.width + 20 || this.y < -20 || this.y > CONFIG.height + 20) {
@@ -770,7 +811,7 @@ class Pickup {
    BOMB (thrown consumables: grenades, molotov, sticky, smoke, stun)
 ========================================================= */
 class Bomb {
-  constructor(type, x, y, stickTarget, thrower = null) {
+  constructor(type, x, y, stickTarget, thrower = null, damageOverride = null) {
     this.id = nextEntityId();
     this.type = type;
     this.x = x;
@@ -782,6 +823,11 @@ class Bomb {
     this.tickTimer = 0;
     this.dead = false;
     this.thrower = thrower; // Player instance that threw it, for per-player kill/weapon stats
+    // Grenade only: its damage is computed per-zone at throw time (see
+    // Game.grenadeDamageForZone) instead of a flat table value, so it keeps
+    // one-shotting "base" enemies without also one-shotting the Bruto no
+    // matter how far the run has progressed.
+    this.damageOverride = damageOverride;
   }
 
   update(dt, game) {
@@ -823,9 +869,10 @@ class Bomb {
     this.exploded = true;
     SoundManager.explosion();
     if (this.type.kind === "damage") {
+      const dmg = this.damageOverride != null ? this.damageOverride : this.type.damage;
       for (const enemy of game.enemies) {
         if (!enemy.dead && dist(enemy.x, enemy.y, this.x, this.y) <= this.type.radius) {
-          game.damageEnemy(enemy, this.type.damage, this.thrower, this.type.id);
+          game.damageEnemy(enemy, dmg, this.thrower, this.type.id);
         }
       }
       this.dead = true;
@@ -1266,8 +1313,18 @@ class Enemy {
 
     if (this.ccTimer > 0) {
       this.ccTimer -= dt;
-      this.isMoving = false;
-      return; // stunned/blinded by a bomb: frozen in place for the duration
+      if (this.ccType === "smoke") {
+        // Blinded, not frozen: loses track of whichever player is nearest
+        // and wanders instead of hunting — unless that player is right on
+        // top of it anyway, too close for the smoke to matter.
+        if (dist(this.x, this.y, player.x, player.y) > SMOKE_BLIND_RADIUS) {
+          this.wanderRandomly(dt);
+          return;
+        }
+      } else {
+        this.isMoving = false;
+        return; // stunned: frozen in place for the duration
+      }
     }
 
     const d = dist(this.x, this.y, player.x, player.y);
@@ -2764,8 +2821,8 @@ class Game {
     this.enemies.push(enemy);
   }
 
-  spawnProjectile(x, y, angle, speed, damage, splashRadius, shooter, weaponId) {
-    this.projectiles.push(new Projectile(x, y, angle, speed, damage, "player", splashRadius, shooter, weaponId));
+  spawnProjectile(x, y, angle, speed, damage, splashRadius, shooter, weaponId, instaKill = false, homing = false) {
+    this.projectiles.push(new Projectile(x, y, angle, speed, damage, "player", splashRadius, shooter, weaponId, instaKill, homing));
   }
 
   spawnEnemyProjectile(x, y, angle, speed, damage) {
@@ -2782,6 +2839,21 @@ class Game {
     actor.selectedThrowable = absolute ? value % n : (actor.selectedThrowable + value + n) % n;
   }
 
+  // Grenade damage is computed here rather than stored as a flat table
+  // value: scaled the same way enemy HP itself scales (zone + player level),
+  // targeted to comfortably one-shot the toughest "base" archetype (Balordo,
+  // hpMult 1.25) while staying safely under the Bruto's 1.6x — so it stays
+  // balanced at zone 1 and at zone 100 alike, however far a run has gone.
+  grenadeDamageForZone() {
+    const sc = CONFIG.zoneScaling;
+    const z = this.zone - 1;
+    const lvl = this.run.playerLevel || 0;
+    const levelHpMult = 1 + sc.hpPerPlayerLevel * lvl;
+    const balordoHpMult = ENEMY_TYPES.find(t => t.id === "balordo").hpMult;
+    const baseHpAtZone = CONFIG.enemy.baseMaxHP * (1 + sc.hpPerZone * z) * balordoHpMult * levelHpMult;
+    return Math.round(baseHpAtZone * 1.15);
+  }
+
   throwBomb(actor = this.player) {
     const type = THROWABLES[actor.selectedThrowable];
     if (!type) return;
@@ -2790,6 +2862,27 @@ class Game {
     this.run.bombs[type.id] = count - 1;
 
     const angle = actor.aimAngle;
+
+    // Knife/shuriken fly like a bullet instead of landing at a fixed point
+    // — see class Projectile's instaKill/homing handling.
+    if (type.isProjectileThrow) {
+      const muzzle = actor.radius + 8;
+      this.spawnProjectile(
+        actor.x + Math.cos(angle) * muzzle,
+        actor.y + Math.sin(angle) * muzzle,
+        angle,
+        type.projectileSpeed,
+        type.damage || 0,
+        0,
+        actor,
+        type.id,
+        !!type.instaKill,
+        !!type.homing
+      );
+      SoundManager.throwBomb();
+      return;
+    }
+
     let x, y, stickTarget = null;
     if (type.sticky) {
       stickTarget = this.findNearestInCone(actor.x, actor.y, angle, THROW_CONE, THROW_RANGE);
@@ -2802,7 +2895,8 @@ class Game {
       x = clamp(actor.x + Math.cos(angle) * THROW_RANGE, margin, CONFIG.width - margin);
       y = clamp(actor.y + Math.sin(angle) * THROW_RANGE, margin, CONFIG.height - margin);
     }
-    this.bombs.push(new Bomb(type, x, y, stickTarget, actor));
+    const damageOverride = type.id === "grenade" ? this.grenadeDamageForZone() : null;
+    this.bombs.push(new Bomb(type, x, y, stickTarget, actor, damageOverride));
     SoundManager.throwBomb();
   }
 
@@ -3395,7 +3489,7 @@ class Game {
 
     for (const proj of this.projectiles) {
       if (proj.dead) continue;
-      proj.update(dt);
+      proj.update(dt, this.enemies);
       if (proj.owner === "enemy") {
         for (const p of this.activePlayers) {
           if (proj.dead) break;
@@ -3417,6 +3511,9 @@ class Game {
                   this.damageEnemy(e2, proj.damage, proj.shooter, proj.weaponId);
                 }
               }
+            } else if (proj.instaKill) {
+              // Thrown knife: kills outright regardless of remaining HP.
+              this.damageEnemy(enemy, enemy.hp, proj.shooter, proj.weaponId);
             } else {
               this.damageEnemy(enemy, proj.damage, proj.shooter, proj.weaponId);
             }
