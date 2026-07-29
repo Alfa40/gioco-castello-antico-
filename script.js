@@ -2123,40 +2123,30 @@ class Game {
     if (isTouch) document.documentElement.classList.add("touch-device");
   }
 
-  // Scales the fixed 960x600 game box to fit the viewport, keeping aspect
+  // Scales the fixed-size game box to fit the viewport, keeping aspect
   // ratio, via a CSS transform — the canvas keeps its native resolution and
   // every pixel-based HUD/panel style stays correct at any screen size.
   //
-  // On a phone/tablet, the canvas is NEVER rotated and the game field must
-  // stay clean: HUD text and touch controls both live outside of it, in
-  // strips above/below (portrait) or panels left/right (landscape) — see the
-  // .portrait-controls / .landscape-controls CSS, which also owns the fixed
-  // pixel size of #game-container for each case (this function just has to
-  // know those same totals to compute a matching scale). A narrow desktop
-  // *browser window* (no touch) keeps the old 90deg-rotate trick instead,
-  // since there's no touch UI to place outside the field there.
+  // The field itself never changes shape or size, on a phone or otherwise:
+  // when the viewport is taller than it is wide (a phone held upright), the
+  // whole box — canvas, HUD strip and touch controls together, as one rigid
+  // #game-container — rotates 90deg so it still reads correctly once the
+  // player turns their phone to match, instead of rearranging the layout
+  // around a portrait-shaped field. Every player picks their own orientation
+  // independently — this is a per-device visual choice, nothing about it is
+  // shared over the network in multiplayer.
   setupResponsiveScaling() {
     const container = document.getElementById("game-container");
-    // Must match the #game-container width/height in the corresponding CSS class.
-    const PORTRAIT_TOTAL = { w: 960, h: 1210 };
-    const LANDSCAPE_TOTAL = { w: 1740, h: 700 };
+    // Must match #game-container's width/height in style.css (the canvas
+    // height plus the HUD strip above it).
+    const TOTAL = { w: CONFIG.width, h: CONFIG.height + 90 };
     const fit = () => {
-      const isTouch = document.documentElement.classList.contains("touch-device");
       const portrait = window.innerHeight > window.innerWidth;
-      document.documentElement.classList.toggle("portrait-controls", isTouch && portrait);
-      document.documentElement.classList.toggle("landscape-controls", isTouch && !portrait);
-      if (isTouch) {
-        this.portraitRotated = false;
-        const total = portrait ? PORTRAIT_TOTAL : LANDSCAPE_TOTAL;
-        const scale = Math.min(window.innerWidth / total.w, window.innerHeight / total.h);
-        container.style.transform = `scale(${scale})`;
-      } else {
-        this.portraitRotated = portrait; // desktop-window-narrow fallback only (no touch UI involved)
-        const scale = portrait
-          ? Math.min(window.innerWidth / CONFIG.height, window.innerHeight / CONFIG.width)
-          : Math.min(window.innerWidth / CONFIG.width, window.innerHeight / CONFIG.height);
-        container.style.transform = `rotate(${portrait ? 90 : 0}deg) scale(${scale})`;
-      }
+      this.portraitRotated = portrait;
+      const scale = portrait
+        ? Math.min(window.innerWidth / TOTAL.h, window.innerHeight / TOTAL.w)
+        : Math.min(window.innerWidth / TOTAL.w, window.innerHeight / TOTAL.h);
+      container.style.transform = `rotate(${portrait ? 90 : 0}deg) scale(${scale})`;
     };
     window.addEventListener("resize", fit);
     window.addEventListener("orientationchange", fit);
@@ -2645,6 +2635,7 @@ class Game {
       weaponLabel.textContent = me.rangedName
         ? `${me.meleeName} · ${me.rangedName} (${me.ammo}/${me.maxAmmo})`
         : me.meleeName;
+      document.getElementById("aim-stick-base").classList.toggle("hidden", !me.rangedName);
     }
     document.getElementById("zone-label").textContent = `Zona ${s.zone} — ${s.zoneName}`;
     document.getElementById("wave-label").textContent = `Nemici rimasti: ${Math.max(0, s.waveTotal - s.waveDefeated)}`;
@@ -3405,6 +3396,10 @@ class Game {
     const bombType = THROWABLES[this.player.selectedThrowable];
     const bombCount = this.run.bombs[bombType.id] || 0;
     document.getElementById("bomb-label").textContent = `${bombType.name} x${bombCount}`;
+
+    // The aim stick only means anything once there's a ranged weapon to aim
+    // — hidden (and untouchable, display:none) until then.
+    document.getElementById("aim-stick-base").classList.toggle("hidden", !this.player.ranged);
   }
 
   // Guest: no local simulation at all — just poll our own input and ship it
