@@ -112,6 +112,14 @@ const SPRITE_SOURCES = {
   sniper: "generated-images/pixel/weapon_sniper.png",
   shotgun: "generated-images/pixel/weapon_shotgun.png",
   rocket: "generated-images/pixel/weapon_rocket.png",
+  // Park obstacles — these files don't exist yet (placeholder circles draw
+  // instead, see Obstacle.draw()); dropping in real art under these exact
+  // names is all that's needed to switch over, no code changes required.
+  tree: "generated-images/pixel/obstacle_tree.png",
+  lamppost: "generated-images/pixel/obstacle_lamppost.png",
+  trashcan: "generated-images/pixel/obstacle_trashcan.png",
+  bench: "generated-images/pixel/obstacle_bench.png",
+  fence: "generated-images/pixel/obstacle_fence.png",
 };
 
 const Sprites = {
@@ -432,6 +440,26 @@ const THROW_RANGE = 260;
 const THROW_CONE = Math.PI / 6;
 const HOMING_TURN_RATE = 2.2; // max radians/second a homing projectile can curve — "insegue leggermente", not a lock-on
 const SMOKE_BLIND_RADIUS = THROWABLES.find(t => t.id === "smoke").blindRadius; // cached once — see Enemy.update()'s ccType === "smoke" branch
+
+// Park obstacles — solid, can't be walked over by a player or enemy until
+// destroyed (see Game.resolveObstacleCollision()). Placeholder colored
+// circles for now (see Obstacle.draw()); real per-type sprites will replace
+// them once art is available, see SPRITE_SOURCES above.
+//   fragile: breakable by regular melee hits (see Player.tryAttack()),
+//     `hitsToBreak` swings needed — only wooden park furniture.
+//   explosionsToDestroy: every obstacle can also be blown up by a grenade or
+//     rocket splash (see Game.explodeObstacles()); trees/lampposts are
+//     sturdier and take two blasts instead of one.
+//   pathSide: placed lining the park's paths (see Game.generatePark()),
+//     like real street furniture — trees/fences scatter across the rest of
+//     the field instead.
+const OBSTACLE_TYPES = [
+  { id: "tree", name: "Albero", radius: 20, color: "#2f6b3f", fragile: false, hitsToBreak: null, explosionsToDestroy: 2, pathSide: false },
+  { id: "lamppost", name: "Palo della luce", radius: 9, color: "#8a8f98", fragile: false, hitsToBreak: null, explosionsToDestroy: 2, pathSide: true },
+  { id: "trashcan", name: "Cestino", radius: 12, color: "#4d6b52", fragile: false, hitsToBreak: null, explosionsToDestroy: 1, pathSide: true },
+  { id: "bench", name: "Panchina", radius: 22, color: "#8a5a2b", fragile: true, hitsToBreak: 6, explosionsToDestroy: 1, pathSide: true },
+  { id: "fence", name: "Recinzione", radius: 16, color: "#a07a3f", fragile: true, hitsToBreak: 8, explosionsToDestroy: 1, pathSide: false },
+];
 
 // Three enemy archetypes with distinct movement/attack behavior, not just
 // stat multipliers, so they read as different threats at a glance.
@@ -808,6 +836,63 @@ class Pickup {
 }
 
 /* =========================================================
+   OBSTACLE (park furniture — solid until destroyed, see OBSTACLE_TYPES)
+========================================================= */
+class Obstacle {
+  constructor(typeId, x, y) {
+    this.id = nextEntityId();
+    this.type = OBSTACLE_TYPES.find(t => t.id === typeId);
+    this.x = x;
+    this.y = y;
+    this.radius = this.type.radius;
+    this.hitsTaken = 0; // regular melee hits — only ever matters if type.fragile
+    this.explosionHits = 0; // grenade/rocket blasts — matters for every type
+    this.destroyed = false;
+  }
+
+  // Regular weapon hit (currently only melee swings register these — see
+  // Player.tryAttack()); a no-op for anything that isn't fragile park
+  // furniture, exactly like real trees/lampposts shrugging off a punch.
+  takeHit() {
+    if (this.destroyed || !this.type.fragile) return;
+    this.hitsTaken++;
+    if (this.hitsTaken >= this.type.hitsToBreak) this.destroyed = true;
+  }
+
+  // One grenade/rocket blast overlapping this obstacle — see
+  // Game.explodeObstacles(). Every type can eventually be blown up, trees
+  // and lampposts just need it twice.
+  takeExplosionHit() {
+    if (this.destroyed) return;
+    this.explosionHits++;
+    if (this.explosionHits >= this.type.explosionsToDestroy) this.destroyed = true;
+  }
+
+  draw(ctx) {
+    if (this.destroyed) return;
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    const sprite = Sprites.get(this.type.id);
+    if (sprite) {
+      drawSpriteFit(ctx, sprite, this.radius * 2.6);
+    } else {
+      // Placeholder until real art is dropped in — see SPRITE_SOURCES.
+      // Fades a little as it takes damage so hits still read as progress.
+      const wear = this.type.fragile ? this.hitsTaken / this.type.hitsToBreak : this.explosionHits / this.type.explosionsToDestroy;
+      ctx.globalAlpha = 1 - clamp(wear, 0, 1) * 0.45;
+      ctx.fillStyle = this.type.color;
+      ctx.beginPath();
+      ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#00000066";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+
+/* =========================================================
    BOMB (thrown consumables: grenades, molotov, sticky, smoke, stun)
 ========================================================= */
 class Bomb {
@@ -875,6 +960,7 @@ class Bomb {
           game.damageEnemy(enemy, dmg, this.thrower, this.type.id);
         }
       }
+      game.explodeObstacles(this.x, this.y, this.type.radius);
       this.dead = true;
     } else {
       this.effectTimer = this.type.duration;
@@ -1059,6 +1145,13 @@ class Player {
       if (d > this.melee.range + enemy.radius) continue;
       game.damageEnemy(enemy, this.melee.damage, this, this.melee.id);
     }
+
+    // Fragile park furniture (wooden benches/fences) also takes a hit from
+    // a swing that reaches it — see Obstacle.takeHit()/OBSTACLE_TYPES.
+    for (const obs of game.obstacles) {
+      if (obs.destroyed || !obs.type.fragile) continue;
+      if (dist(this.x, this.y, obs.x, obs.y) <= this.melee.range + obs.radius) obs.takeHit();
+    }
   }
 
   // Touch-only hands-free melee: the touch attack button was replaced by the
@@ -1131,7 +1224,7 @@ class Player {
     return true;
   }
 
-  update(dt, input) {
+  update(dt, input, game) {
     if (this.attackCooldownTimer > 0) this.attackCooldownTimer -= dt;
     if (this.attackActiveTimer > 0) this.attackActiveTimer -= dt;
     if (this.rangedCooldownTimer > 0) this.rangedCooldownTimer -= dt;
@@ -1181,6 +1274,10 @@ class Player {
     const margin = this.radius + 6;
     this.x = clamp(this.x, margin, CONFIG.width - margin);
     this.y = clamp(this.y, margin + 60, CONFIG.height - margin);
+
+    // Solid park obstacles block movement (walking or dashing) just like
+    // the field's own edges — see Game.resolveObstacleCollision().
+    if (game) game.resolveObstacleCollision(this);
   }
 
   draw(ctx) {
@@ -1374,6 +1471,12 @@ class Enemy {
     const margin = this.radius + 4;
     this.x = clamp(this.x, margin, CONFIG.width - margin);
     this.y = clamp(this.y, margin + 60, CONFIG.height - margin);
+
+    // Solid park obstacles block enemy movement too — see
+    // Game.resolveObstacleCollision(). The driveby car returns early above
+    // and never reaches here, exactly like it already skips this same
+    // field-boundary clamp.
+    game.resolveObstacleCollision(this);
   }
 
   // Straight-line pass across the field: never turns, never melees, just
@@ -1992,6 +2095,10 @@ class Game {
     this.pickups = [];
     this.bombs = [];
     this.floatingTexts = [];
+    // Park furniture (see OBSTACLE_TYPES/generatePark()) — populated fresh
+    // whenever a run actually starts, not here.
+    this.obstacles = [];
+    this.parkPath = [];
 
     this.zone = 1;
     this.moneyThisRun = 0;
@@ -2154,6 +2261,7 @@ class Game {
     this.bombs = [];
     this.player.selectedThrowable = 0;
     this.floatingTexts = [];
+    this.generatePark();
     this.setState("playing");
     this.startZone();
   }
@@ -2633,6 +2741,11 @@ class Game {
         id: b.id, x: b.x, y: b.y, typeId: b.type.id, exploded: b.exploded,
         effectTimer: b.effectTimer, fuseDuration: b.type.fuse,
       })),
+      obstacles: this.obstacles.filter(o => !o.destroyed).map(o => ({
+        id: o.id, x: o.x, y: o.y, radius: o.radius, typeId: o.type.id,
+        hitsTaken: o.hitsTaken, explosionHits: o.explosionHits,
+      })),
+      parkPath: this.parkPath,
       floatingTexts: this.floatingTexts.map(ft => ({
         x: ft.x, y: ft.y, text: ft.text, color: ft.color, life: ft.life, maxLife: ft.maxLife,
       })),
@@ -2663,6 +2776,7 @@ class Game {
     this._snapReceivedAt = now;
 
     this.zone = state.zone; // lets drawBackground()'s darkness-by-zone logic work unmodified
+    this.parkPath = state.parkPath || this.parkPath; // static between regenerations — see drawPark()
     this.applyGuestUIState();
   }
 
@@ -2835,6 +2949,12 @@ class Game {
       exploded: b.exploded, effectTimer: b.effectTimer, fuse: b.fuseDuration, dead: false,
     });
   }
+  mkObstacle(o) {
+    return Object.assign(Object.create(Obstacle.prototype), {
+      x: o.x, y: o.y, radius: o.radius, type: OBSTACLE_TYPES.find(t => t.id === o.typeId) || OBSTACLE_TYPES[0],
+      hitsTaken: o.hitsTaken, explosionHits: o.explosionHits, destroyed: false,
+    });
+  }
   mkText(ft) {
     return Object.assign(Object.create(FloatingText.prototype), {
       x: ft.x, y: ft.y, text: ft.text, color: ft.color, life: ft.life, maxLife: ft.maxLife,
@@ -2903,6 +3023,7 @@ class Game {
     this.bombs = [];
     this.player.selectedThrowable = 0;
     this.floatingTexts = [];
+    this.generatePark();
     this.setState("playing");
     this.startZone();
   }
@@ -2919,6 +3040,158 @@ class Game {
     this.enemiesToSpawn = count;
     this.spawnTimer = 0;
     SoundManager.wave();
+  }
+
+  /* =======================================================
+     PARK (obstacles + the paths they line — see OBSTACLE_TYPES)
+  ======================================================= */
+
+  // Shortest distance from (x,y) to the segment (x1,y1)-(x2,y2).
+  distToSegment(x, y, x1, y1, x2, y2) {
+    const dx = x2 - x1, dy = y2 - y1;
+    const lenSq = dx * dx + dy * dy;
+    let t = lenSq > 0 ? ((x - x1) * dx + (y - y1) * dy) / lenSq : 0;
+    t = clamp(t, 0, 1);
+    return dist(x, y, x1 + dx * t, y1 + dy * t);
+  }
+
+  distToPath(x, y) {
+    let best = Infinity;
+    for (let i = 1; i < this.parkPath.length; i++) {
+      const a = this.parkPath[i - 1], b = this.parkPath[i];
+      best = Math.min(best, this.distToSegment(x, y, a.x, a.y, b.x, b.y));
+    }
+    return best;
+  }
+
+  // A gently bent walkway crossing the field corner-to-corner-ish, just so
+  // there's something for path-side furniture to line — see generatePark().
+  // A real drawn path (once the promised art arrives) replaces this purely
+  // visually; the placement logic underneath doesn't change.
+  generateParkPath() {
+    const left = 60, right = CONFIG.width - 60, top = 130, bottom = CONFIG.height - 60;
+    const fromLeft = Math.random() < 0.5;
+    const y1 = rand(top, bottom);
+    const y2 = rand(top, bottom);
+    const midY = clamp((y1 + y2) / 2 + rand(-90, 90), top, bottom);
+    return fromLeft
+      ? [{ x: left, y: y1 }, { x: CONFIG.width / 2, y: midY }, { x: right, y: y2 }]
+      : [{ x: right, y: y1 }, { x: CONFIG.width / 2, y: midY }, { x: left, y: y2 }];
+  }
+
+  // True if (x,y) with the given radius doesn't overlap the path, any
+  // already-placed obstacle, or the players' shared spawn point.
+  parkSpotFree(x, y, radius, minPathDist) {
+    if (this.distToPath(x, y) < minPathDist) return false;
+    if (dist(x, y, CONFIG.width / 2, CONFIG.height / 2) < 90) return false;
+    for (const obs of this.obstacles) {
+      if (dist(x, y, obs.x, obs.y) < radius + obs.radius + 10) return false;
+    }
+    return true;
+  }
+
+  // Fresh random park layout: a walkway plus path-side furniture (benches,
+  // trash cans, lampposts) lining it like real street furniture, and trees/
+  // fences scattered across the rest of the field — see OBSTACLE_TYPES'
+  // `pathSide` flag. Called on every new run and again every 10 zones (see
+  // closeUpgradeMenu()).
+  generatePark() {
+    this.obstacles = [];
+    this.parkPath = this.generateParkPath();
+
+    // Path-side furniture: walk along the path at fixed intervals, offset
+    // to alternating sides, cycling through the three path-side types.
+    const pathSideTypes = OBSTACLE_TYPES.filter(t => t.pathSide);
+    const segLengths = [];
+    let totalLen = 0;
+    for (let i = 1; i < this.parkPath.length; i++) {
+      const a = this.parkPath[i - 1], b = this.parkPath[i];
+      const len = dist(a.x, a.y, b.x, b.y);
+      segLengths.push(len);
+      totalLen += len;
+    }
+    const spacing = 130;
+    let typeIdx = 0;
+    let side = 1;
+    for (let travelled = spacing / 2; travelled < totalLen; travelled += spacing) {
+      let remaining = travelled, segIdx = 0;
+      while (segIdx < segLengths.length - 1 && remaining > segLengths[segIdx]) {
+        remaining -= segLengths[segIdx];
+        segIdx++;
+      }
+      const a = this.parkPath[segIdx], b = this.parkPath[segIdx + 1];
+      const segLen = segLengths[segIdx] || 1;
+      const t = clamp(remaining / segLen, 0, 1);
+      const px = a.x + (b.x - a.x) * t;
+      const py = a.y + (b.y - a.y) * t;
+      // Perpendicular to the segment direction, so furniture sits beside
+      // the path rather than on top of it.
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const segDist = Math.hypot(dx, dy) || 1;
+      const nx = -dy / segDist, ny = dx / segDist;
+      const offset = rand(38, 52) * side;
+      const type = pathSideTypes[typeIdx % pathSideTypes.length];
+      typeIdx++;
+      side *= -1;
+      const x = clamp(px + nx * offset, 30, CONFIG.width - 30);
+      const y = clamp(py + ny * offset, 100, CONFIG.height - 30);
+      if (this.parkSpotFree(x, y, type.radius, 20)) {
+        this.obstacles.push(new Obstacle(type.id, x, y));
+      }
+    }
+
+    // Trees and fences scatter across the rest of the field, clear of the
+    // path itself and everything already placed.
+    const scatterTypes = OBSTACLE_TYPES.filter(t => !t.pathSide);
+    const scatterCount = 10;
+    for (let i = 0; i < scatterCount; i++) {
+      const type = scatterTypes[randInt(0, scatterTypes.length - 1)];
+      let placed = false;
+      for (let attempt = 0; attempt < 20 && !placed; attempt++) {
+        const x = rand(40, CONFIG.width - 40);
+        const y = rand(110, CONFIG.height - 40);
+        if (this.parkSpotFree(x, y, type.radius, 45)) {
+          this.obstacles.push(new Obstacle(type.id, x, y));
+          placed = true;
+        }
+      }
+    }
+  }
+
+  // Pushes `entity` (a Player or Enemy, anything with x/y/radius) back out
+  // of any obstacle it's currently overlapping — the same "solid wall"
+  // treatment as the field's own edges, called right after every movement
+  // update (see Player.update()/Enemy.update()).
+  resolveObstacleCollision(entity) {
+    // Multiple passes: pushing out of one obstacle can reintroduce overlap
+    // with a neighboring one (they're only guaranteed ~10px apart from each
+    // other, see parkSpotFree()) — a single pass could let the entity
+    // "tunnel" partway past one of them in that narrow window. A few passes
+    // converge to a position clear of every obstacle at once.
+    for (let pass = 0; pass < 3; pass++) {
+      for (const obs of this.obstacles) {
+        if (obs.destroyed) continue;
+        const dx = entity.x - obs.x, dy = entity.y - obs.y;
+        const d = Math.hypot(dx, dy);
+        const minD = entity.radius + obs.radius;
+        if (d < minD) {
+          const nx = d > 0 ? dx / d : 1, ny = d > 0 ? dy / d : 0;
+          entity.x = obs.x + nx * minD;
+          entity.y = obs.y + ny * minD;
+        }
+      }
+    }
+  }
+
+  // One grenade/rocket blast centered at (x,y) with the given radius —
+  // every overlapping obstacle takes one explosion hit (see
+  // Obstacle.takeExplosionHit()), called from Bomb.detonate() and the
+  // rocket splash handling in update().
+  explodeObstacles(x, y, radius) {
+    for (const obs of this.obstacles) {
+      if (obs.destroyed) continue;
+      if (dist(x, y, obs.x, obs.y) <= radius + obs.radius) obs.takeExplosionHit();
+    }
   }
 
   spawnEnemy() {
@@ -3218,6 +3491,9 @@ class Game {
     document.getElementById("upgrade-screen").classList.add("hidden");
     if (this.menuMode === "zoneComplete") {
       this.zone++;
+      // Every 10 zones the park randomly regenerates — new trees, benches,
+      // paths, etc. (zone 1's own layout comes from startRun/resumeRun).
+      if ((this.zone - 1) % 10 === 0) this.generatePark();
       this.startZone();
     }
     this.state = "playing";
@@ -3648,7 +3924,7 @@ class Game {
 
     if (this.state !== "playing") return;
 
-    this.player.update(dt, this.input);
+    this.player.update(dt, this.input, this);
     // Attack/shoot/dash are held down rather than edge-triggered (there's no
     // "keydown" equivalent for a polled gamepad); their own cooldowns already
     // throttle this the same way holding a keyboard key would. Melee and
@@ -3671,7 +3947,7 @@ class Game {
     // arrive over the socket — see applyRemoteAction.
     for (const entry of this.remotePlayers.values()) {
       if (entry.player.hp <= 0) continue;
-      entry.player.update(dt, entry.input);
+      entry.player.update(dt, entry.input, this);
       entry.player.autoFireRanged(this);
       if (entry.isTouchDevice) entry.player.autoMeleeAttack(this);
     }
@@ -3718,6 +3994,7 @@ class Game {
                   this.damageEnemy(e2, proj.damage, proj.shooter, proj.weaponId);
                 }
               }
+              this.explodeObstacles(proj.x, proj.y, proj.splashRadius);
             } else if (proj.instaKill) {
               // Thrown knife: kills outright regardless of remaining HP.
               this.damageEnemy(enemy, enemy.hp, proj.shooter, proj.weaponId);
@@ -3747,6 +4024,8 @@ class Game {
 
     for (const bomb of this.bombs) bomb.update(dt, this);
     this.bombs = this.bombs.filter(b => !b.dead);
+
+    this.obstacles = this.obstacles.filter(o => !o.destroyed);
 
     for (const ft of this.floatingTexts) ft.update(dt);
     this.floatingTexts = this.floatingTexts.filter(ft => !ft.dead);
@@ -3794,9 +4073,32 @@ class Game {
     }
   }
 
+  // The park's walkway (a simple translucent strip until real art replaces
+  // it) plus every obstacle lining or scattered around it — see
+  // generatePark(). Drawn right after the background so entities always
+  // render on top of it, same as everything else in this game's flat
+  // (non-y-sorted) layering.
+  drawPark(obstacles) {
+    const ctx = this.ctx;
+    if (this.parkPath && this.parkPath.length > 1) {
+      ctx.save();
+      ctx.strokeStyle = "rgba(196, 184, 150, 0.3)";
+      ctx.lineWidth = 34;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.beginPath();
+      ctx.moveTo(this.parkPath[0].x, this.parkPath[0].y);
+      for (let i = 1; i < this.parkPath.length; i++) ctx.lineTo(this.parkPath[i].x, this.parkPath[i].y);
+      ctx.stroke();
+      ctx.restore();
+    }
+    for (const obs of obstacles) obs.draw(ctx);
+  }
+
   draw() {
     if (this.network.isGuest) { this.drawFromSnapshot(); return; }
     this.drawBackground();
+    this.drawPark(this.obstacles);
     for (const bomb of this.bombs) bomb.draw(this.ctx);
     for (const pickup of this.pickups) pickup.draw(this.ctx);
     for (const enemy of this.enemies) enemy.draw(this.ctx);
@@ -3813,6 +4115,7 @@ class Game {
     this.drawBackground();
     const curr = this._snapCurr;
     if (!curr) return;
+    this.drawPark((curr.obstacles || []).map(o => this.mkObstacle(o)));
     const prev = this._snapPrev;
     // How far between the previous and current snapshot "now" sits, based
     // on real elapsed wall-clock time — not on frame count, so it stays
