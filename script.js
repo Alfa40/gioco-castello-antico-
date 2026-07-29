@@ -112,6 +112,14 @@ const SPRITE_SOURCES = {
   sniper: "generated-images/pixel/weapon_sniper.png",
   shotgun: "generated-images/pixel/weapon_shotgun.png",
   rocket: "generated-images/pixel/weapon_rocket.png",
+  // Park obstacles — these files don't exist yet (placeholder circles draw
+  // instead, see Obstacle.draw()); dropping in real art under these exact
+  // names is all that's needed to switch over, no code changes required.
+  tree: "generated-images/pixel/obstacle_tree.png",
+  lamppost: "generated-images/pixel/obstacle_lamppost.png",
+  trashcan: "generated-images/pixel/obstacle_trashcan.png",
+  bench: "generated-images/pixel/obstacle_bench.png",
+  fence: "generated-images/pixel/obstacle_fence.png",
 };
 
 const Sprites = {
@@ -432,6 +440,26 @@ const THROW_RANGE = 260;
 const THROW_CONE = Math.PI / 6;
 const HOMING_TURN_RATE = 2.2; // max radians/second a homing projectile can curve — "insegue leggermente", not a lock-on
 const SMOKE_BLIND_RADIUS = THROWABLES.find(t => t.id === "smoke").blindRadius; // cached once — see Enemy.update()'s ccType === "smoke" branch
+
+// Park obstacles — solid, can't be walked over by a player or enemy until
+// destroyed (see Game.resolveObstacleCollision()). Placeholder colored
+// circles for now (see Obstacle.draw()); real per-type sprites will replace
+// them once art is available, see SPRITE_SOURCES above.
+//   fragile: breakable by regular melee hits (see Player.tryAttack()),
+//     `hitsToBreak` swings needed — only wooden park furniture.
+//   explosionsToDestroy: every obstacle can also be blown up by a grenade or
+//     rocket splash (see Game.explodeObstacles()); trees/lampposts are
+//     sturdier and take two blasts instead of one.
+//   pathSide: placed lining the park's paths (see Game.generatePark()),
+//     like real street furniture — trees/fences scatter across the rest of
+//     the field instead.
+const OBSTACLE_TYPES = [
+  { id: "tree", name: "Albero", radius: 20, color: "#2f6b3f", fragile: false, hitsToBreak: null, explosionsToDestroy: 2, pathSide: false },
+  { id: "lamppost", name: "Palo della luce", radius: 9, color: "#8a8f98", fragile: false, hitsToBreak: null, explosionsToDestroy: 2, pathSide: true },
+  { id: "trashcan", name: "Cestino", radius: 12, color: "#4d6b52", fragile: false, hitsToBreak: null, explosionsToDestroy: 1, pathSide: true },
+  { id: "bench", name: "Panchina", radius: 22, color: "#8a5a2b", fragile: true, hitsToBreak: 6, explosionsToDestroy: 1, pathSide: true },
+  { id: "fence", name: "Recinzione", radius: 16, color: "#a07a3f", fragile: true, hitsToBreak: 8, explosionsToDestroy: 1, pathSide: false },
+];
 
 // Three enemy archetypes with distinct movement/attack behavior, not just
 // stat multipliers, so they read as different threats at a glance.
@@ -808,6 +836,63 @@ class Pickup {
 }
 
 /* =========================================================
+   OBSTACLE (park furniture — solid until destroyed, see OBSTACLE_TYPES)
+========================================================= */
+class Obstacle {
+  constructor(typeId, x, y) {
+    this.id = nextEntityId();
+    this.type = OBSTACLE_TYPES.find(t => t.id === typeId);
+    this.x = x;
+    this.y = y;
+    this.radius = this.type.radius;
+    this.hitsTaken = 0; // regular melee hits — only ever matters if type.fragile
+    this.explosionHits = 0; // grenade/rocket blasts — matters for every type
+    this.destroyed = false;
+  }
+
+  // Regular weapon hit (currently only melee swings register these — see
+  // Player.tryAttack()); a no-op for anything that isn't fragile park
+  // furniture, exactly like real trees/lampposts shrugging off a punch.
+  takeHit() {
+    if (this.destroyed || !this.type.fragile) return;
+    this.hitsTaken++;
+    if (this.hitsTaken >= this.type.hitsToBreak) this.destroyed = true;
+  }
+
+  // One grenade/rocket blast overlapping this obstacle — see
+  // Game.explodeObstacles(). Every type can eventually be blown up, trees
+  // and lampposts just need it twice.
+  takeExplosionHit() {
+    if (this.destroyed) return;
+    this.explosionHits++;
+    if (this.explosionHits >= this.type.explosionsToDestroy) this.destroyed = true;
+  }
+
+  draw(ctx) {
+    if (this.destroyed) return;
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    const sprite = Sprites.get(this.type.id);
+    if (sprite) {
+      drawSpriteFit(ctx, sprite, this.radius * 2.6);
+    } else {
+      // Placeholder until real art is dropped in — see SPRITE_SOURCES.
+      // Fades a little as it takes damage so hits still read as progress.
+      const wear = this.type.fragile ? this.hitsTaken / this.type.hitsToBreak : this.explosionHits / this.type.explosionsToDestroy;
+      ctx.globalAlpha = 1 - clamp(wear, 0, 1) * 0.45;
+      ctx.fillStyle = this.type.color;
+      ctx.beginPath();
+      ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#00000066";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+
+/* =========================================================
    BOMB (thrown consumables: grenades, molotov, sticky, smoke, stun)
 ========================================================= */
 class Bomb {
@@ -875,6 +960,7 @@ class Bomb {
           game.damageEnemy(enemy, dmg, this.thrower, this.type.id);
         }
       }
+      game.explodeObstacles(this.x, this.y, this.type.radius);
       this.dead = true;
     } else {
       this.effectTimer = this.type.duration;
@@ -937,6 +1023,13 @@ class Player {
     this._rangedMaxAmmo = null; // tracks capacity changes from magazine sub-upgrades
 
     this.selectedThrowable = 0; // index into THROWABLES
+
+    // Every player owns their own shop economy (money, upgrades, weapon
+    // tiers, bomb inventory) — see createRunState(). Game.run is a thin
+    // alias for the local/host player's own run so all of the pre-existing
+    // single-run code keeps working unmodified; co-op purchases just target
+    // a different Player's run explicitly (see the buy* methods' `actor` arg).
+    this.run = createRunState();
 
     // Per-player run stats (kills, money earned, kills by weapon) — shown
     // on the shop's stats screen; reset alongside everything else in
@@ -1052,6 +1145,13 @@ class Player {
       if (d > this.melee.range + enemy.radius) continue;
       game.damageEnemy(enemy, this.melee.damage, this, this.melee.id);
     }
+
+    // Fragile park furniture (wooden benches/fences) also takes a hit from
+    // a swing that reaches it — see Obstacle.takeHit()/OBSTACLE_TYPES.
+    for (const obs of game.obstacles) {
+      if (obs.destroyed || !obs.type.fragile) continue;
+      if (dist(this.x, this.y, obs.x, obs.y) <= this.melee.range + obs.radius) obs.takeHit();
+    }
   }
 
   // Touch-only hands-free melee: the touch attack button was replaced by the
@@ -1124,7 +1224,7 @@ class Player {
     return true;
   }
 
-  update(dt, input) {
+  update(dt, input, game) {
     if (this.attackCooldownTimer > 0) this.attackCooldownTimer -= dt;
     if (this.attackActiveTimer > 0) this.attackActiveTimer -= dt;
     if (this.rangedCooldownTimer > 0) this.rangedCooldownTimer -= dt;
@@ -1174,6 +1274,10 @@ class Player {
     const margin = this.radius + 6;
     this.x = clamp(this.x, margin, CONFIG.width - margin);
     this.y = clamp(this.y, margin + 60, CONFIG.height - margin);
+
+    // Solid park obstacles block movement (walking or dashing) just like
+    // the field's own edges — see Game.resolveObstacleCollision().
+    if (game) game.resolveObstacleCollision(this);
   }
 
   draw(ctx) {
@@ -1299,6 +1403,11 @@ class Enemy {
     // crowd control from smoke/stun bombs
     this.ccTimer = 0;
     this.ccType = null; // "smoke" | "stun"
+
+    // Cumulative damage dealt by each contributing Player instance across
+    // this enemy's whole lifetime — split the kill's payout proportionally
+    // between everyone who hit it, see Game.damageEnemy().
+    this.damageBy = new Map();
   }
 
   update(dt, player, game) {
@@ -1362,6 +1471,12 @@ class Enemy {
     const margin = this.radius + 4;
     this.x = clamp(this.x, margin, CONFIG.width - margin);
     this.y = clamp(this.y, margin + 60, CONFIG.height - margin);
+
+    // Solid park obstacles block enemy movement too — see
+    // Game.resolveObstacleCollision(). The driveby car returns early above
+    // and never reaches here, exactly like it already skips this same
+    // field-boundary clamp.
+    game.resolveObstacleCollision(this);
   }
 
   // Straight-line pass across the field: never turns, never melees, just
@@ -1943,9 +2058,19 @@ class Game {
       if (this.network.isGuest) { this.network.send({ type: "action", action: "dash" }); return; }
       if (this.state === "playing") this.player.tryDash();
     };
-    // Pause/shop stays host-only in this version — the guest is a thin
-    // client and doesn't manage the shared shop UI, see README.
-    this.input.onToggleMenu = () => { if (!this.network.isGuest) this.toggleUpgradeMenu(); };
+    // Every player has their own shop menu (own money/upgrades — see
+    // Game.run's getter/setter and the buy* methods' `actor` arg). A guest
+    // has no shared pause to trigger on its own, so its button only
+    // shows/hides its own view of whatever the host's current pause already
+    // put on screen — see applyGuestUIState()/guestShopHidden.
+    this.input.onToggleMenu = () => {
+      if (this.network.isGuest) {
+        this.guestShopHidden = !this.guestShopHidden;
+        this.applyGuestUIState();
+        return;
+      }
+      this.toggleUpgradeMenu();
+    };
     this.input.onThrowBomb = () => {
       if (this.network.isGuest) { this.network.send({ type: "action", action: "throwBomb" }); return; }
       if (this.state === "playing") this.throwBomb(this.player);
@@ -1955,16 +2080,25 @@ class Game {
       if (this.state === "playing") this.selectBomb(value, absolute, this.player);
     };
 
-    this.run = createRunState();
     this.player = new Player(CONFIG.width / 2, CONFIG.height / 2);
-    this.player.refreshLoadout(this.run);
+    this.player.refreshLoadout(this.player.run);
     this.player.resetForRun();
+
+    // Guest-only: whether this client has chosen to hide its own shop while
+    // the host has the shared game paused — see applyGuestUIState().
+    this.guestShopHidden = false;
+    this._wasShopActive = false;
+    this._guestShopFingerprint = null;
 
     this.enemies = [];
     this.projectiles = [];
     this.pickups = [];
     this.bombs = [];
     this.floatingTexts = [];
+    // Park furniture (see OBSTACLE_TYPES/generatePark()) — populated fresh
+    // whenever a run actually starts, not here.
+    this.obstacles = [];
+    this.parkPath = [];
 
     this.zone = 1;
     this.moneyThisRun = 0;
@@ -1989,6 +2123,23 @@ class Game {
     requestAnimationFrame(this.loop);
   }
 
+  // Alias for the local/host player's own run — every pre-existing
+  // single-run reference (this.run.money, this.run = createRunState(), ...)
+  // keeps meaning exactly that, while co-op purchases explicitly target a
+  // different Player's own `.run` via the buy* methods' `actor` argument.
+  get run() { return this.player.run; }
+  set run(v) { this.player.run = v; }
+
+  // Sum of every connected player's own playerLevel (regardless of whether
+  // they're currently alive) — the party's total purchased power, used to
+  // scale enemies/grenade damage so difficulty keeps pace with the whole
+  // group's progress, not just whichever single run used to hold it.
+  get totalPlayerLevel() {
+    let total = this.player.run.playerLevel || 0;
+    for (const entry of this.remotePlayers.values()) total += entry.player.run.playerLevel || 0;
+    return total;
+  }
+
   bindUI() {
     document.getElementById("start-btn").addEventListener("click", () => {
       SoundManager.ensure();
@@ -2003,6 +2154,7 @@ class Game {
       this.startRun();
     });
     document.getElementById("upgrade-continue-btn").addEventListener("click", () => {
+      if (this.network.isGuest) { this.guestShopHidden = true; this.applyGuestUIState(); return; }
       this.closeUpgradeMenu();
     });
     document.getElementById("mute-btn").addEventListener("click", () => {
@@ -2043,9 +2195,11 @@ class Game {
   }
 
   // Home screen of the shop: this run's stats for the player currently
-  // looking at it — see Player.runStats, updated in damageEnemy().
-  renderShopStats() {
-    const stats = this.player.runStats;
+  // looking at it — see Player.runStats, updated in damageEnemy(). Also
+  // accepts the plain snapshot entry for a guest's own player (has the same
+  // `.runStats` field — see serializePlayer()).
+  renderShopStats(playerLike = this.player) {
+    const stats = playerLike.runStats;
     document.getElementById("stat-zone").textContent = this.zone;
     document.getElementById("stat-kills").textContent = stats.kills;
     document.getElementById("stat-money-earned").textContent = `${stats.moneyEarned} €`;
@@ -2107,6 +2261,7 @@ class Game {
     this.bombs = [];
     this.player.selectedThrowable = 0;
     this.floatingTexts = [];
+    this.generatePark();
     this.setState("playing");
     this.startZone();
   }
@@ -2123,40 +2278,30 @@ class Game {
     if (isTouch) document.documentElement.classList.add("touch-device");
   }
 
-  // Scales the fixed 960x600 game box to fit the viewport, keeping aspect
+  // Scales the fixed-size game box to fit the viewport, keeping aspect
   // ratio, via a CSS transform — the canvas keeps its native resolution and
   // every pixel-based HUD/panel style stays correct at any screen size.
   //
-  // On a phone/tablet, the canvas is NEVER rotated and the game field must
-  // stay clean: HUD text and touch controls both live outside of it, in
-  // strips above/below (portrait) or panels left/right (landscape) — see the
-  // .portrait-controls / .landscape-controls CSS, which also owns the fixed
-  // pixel size of #game-container for each case (this function just has to
-  // know those same totals to compute a matching scale). A narrow desktop
-  // *browser window* (no touch) keeps the old 90deg-rotate trick instead,
-  // since there's no touch UI to place outside the field there.
+  // The field itself never changes shape or size, on a phone or otherwise:
+  // when the viewport is taller than it is wide (a phone held upright), the
+  // whole box — canvas, HUD strip and touch controls together, as one rigid
+  // #game-container — rotates 90deg so it still reads correctly once the
+  // player turns their phone to match, instead of rearranging the layout
+  // around a portrait-shaped field. Every player picks their own orientation
+  // independently — this is a per-device visual choice, nothing about it is
+  // shared over the network in multiplayer.
   setupResponsiveScaling() {
     const container = document.getElementById("game-container");
-    // Must match the #game-container width/height in the corresponding CSS class.
-    const PORTRAIT_TOTAL = { w: 960, h: 1210 };
-    const LANDSCAPE_TOTAL = { w: 1740, h: 700 };
+    // Must match #game-container's width/height in style.css (the canvas
+    // height plus the HUD strip above it).
+    const TOTAL = { w: CONFIG.width, h: CONFIG.height + 90 };
     const fit = () => {
-      const isTouch = document.documentElement.classList.contains("touch-device");
       const portrait = window.innerHeight > window.innerWidth;
-      document.documentElement.classList.toggle("portrait-controls", isTouch && portrait);
-      document.documentElement.classList.toggle("landscape-controls", isTouch && !portrait);
-      if (isTouch) {
-        this.portraitRotated = false;
-        const total = portrait ? PORTRAIT_TOTAL : LANDSCAPE_TOTAL;
-        const scale = Math.min(window.innerWidth / total.w, window.innerHeight / total.h);
-        container.style.transform = `scale(${scale})`;
-      } else {
-        this.portraitRotated = portrait; // desktop-window-narrow fallback only (no touch UI involved)
-        const scale = portrait
-          ? Math.min(window.innerWidth / CONFIG.height, window.innerHeight / CONFIG.width)
-          : Math.min(window.innerWidth / CONFIG.width, window.innerHeight / CONFIG.height);
-        container.style.transform = `rotate(${portrait ? 90 : 0}deg) scale(${scale})`;
-      }
+      this.portraitRotated = portrait;
+      const scale = portrait
+        ? Math.min(window.innerWidth / TOTAL.h, window.innerHeight / TOTAL.w)
+        : Math.min(window.innerWidth / TOTAL.w, window.innerHeight / TOTAL.h);
+      container.style.transform = `rotate(${portrait ? 90 : 0}deg) scale(${scale})`;
     };
     window.addEventListener("resize", fit);
     window.addEventListener("orientationchange", fit);
@@ -2178,15 +2323,15 @@ class Game {
 
     document.getElementById("touch-bomb-throw").addEventListener("touchstart", e => {
       e.preventDefault();
-      if (this.state === "playing") this.throwBomb();
+      this.input.onThrowBomb();
     }, { passive: false });
     document.getElementById("touch-bomb-select").addEventListener("touchstart", e => {
       e.preventDefault();
-      if (this.state === "playing") this.selectBomb(1, false);
+      this.input.onSelectBomb(1, false);
     }, { passive: false });
     document.getElementById("touch-pause").addEventListener("touchstart", e => {
       e.preventDefault();
-      this.toggleUpgradeMenu();
+      this.input.onToggleMenu();
     }, { passive: false });
 
     this.bindJoystick();
@@ -2405,7 +2550,7 @@ class Game {
     if (!this.network.isHost || this.remotePlayers.has(id)) return;
     const off = this.spawnOffsetFor(this.remotePlayers.size + 1);
     const player = new Player(CONFIG.width / 2 + off.x, CONFIG.height / 2 + off.y);
-    player.refreshLoadout(this.run);
+    player.refreshLoadout(player.run); // fresh run of their own, just created above
     player.resetForRun();
     const isTouchDevice = this._pendingTouchFlags.get(id) || false;
     this._pendingTouchFlags.delete(id);
@@ -2466,20 +2611,15 @@ class Game {
     return offsets[index % offsets.length];
   }
 
-  // Applies the current run's upgrades/weapons to every connected player —
-  // shared by every shop purchase handler below.
-  refreshAllLoadouts() {
-    this.player.refreshLoadout(this.run);
-    for (const entry of this.remotePlayers.values()) entry.player.refreshLoadout(this.run);
-  }
-
-  // Refreshes loadout and re-spawns every currently-connected remote player
-  // around the host's spawn point — shared by startRun()/resumeRun().
+  // Refreshes loadout (against each remote player's own run — every player
+  // has an independent economy, see createRunState()/Game.run) and re-spawns
+  // every currently-connected remote player around the host's spawn point —
+  // shared by startRun()/resumeRun().
   repositionRemotePlayers() {
     let i = 1;
     for (const entry of this.remotePlayers.values()) {
       const off = this.spawnOffsetFor(i++);
-      entry.player.refreshLoadout(this.run);
+      entry.player.refreshLoadout(entry.player.run);
       entry.player.resetForRun();
       entry.player.x = CONFIG.width / 2 + off.x;
       entry.player.y = CONFIG.height / 2 + off.y;
@@ -2524,16 +2664,35 @@ class Game {
   // edge-triggered onAttack/onDash/etc. — one message per press, cooldowns
   // inside tryAttack/tryDash/etc. already make repeats harmless).
   applyRemoteAction(msg) {
-    if (!this.network.isHost || this.state !== "playing") return;
+    if (!this.network.isHost) return;
     const entry = this.remotePlayers.get(msg.from);
     if (!entry) return;
     const rp = entry.player;
-    switch (msg.action) {
-      case "attack": rp.tryAttack(this); break;
-      case "rangedAttack": rp.tryRangedAttack(this); break;
-      case "dash": rp.tryDash(); break;
-      case "throwBomb": this.throwBomb(rp); break;
-      case "selectBomb": this.selectBomb(msg.value, msg.absolute, rp); break;
+    // Gameplay actions only while actively playing, exactly like the local
+    // player's own input handlers above.
+    if (this.state === "playing") {
+      switch (msg.action) {
+        case "attack": rp.tryAttack(this); return;
+        case "rangedAttack": rp.tryRangedAttack(this); return;
+        case "dash": rp.tryDash(); return;
+        case "throwBomb": this.throwBomb(rp); return;
+        case "selectBomb": this.selectBomb(msg.value, msg.absolute, rp); return;
+      }
+      return;
+    }
+    // Shop purchases only while the shared game is paused (mid-fight pause
+    // or the automatic zone-complete break) — each guest spends against
+    // their own run, see the buy* methods' `actor` arg.
+    if (this.state === "paused") {
+      switch (msg.action) {
+        case "buyHouseUpgrade": this.buyHouseUpgrade(msg.id, rp); return;
+        case "buyMeleeWeapon": this.buyMeleeWeapon(msg.idx, rp); return;
+        case "buyRangedWeapon": this.buyRangedWeapon(msg.idx, rp); return;
+        case "buyMeleeWeaponUpgrade": this.buyMeleeWeaponUpgrade(msg.id, rp); return;
+        case "buyRangedWeaponUpgrade": this.buyRangedWeaponUpgrade(msg.id, rp); return;
+        case "buyBomb": this.buyBomb(msg.id, rp); return;
+        case "buyAmmo": this.buyAmmo(rp); return;
+      }
     }
   }
 
@@ -2550,6 +2709,11 @@ class Game {
       hitFlash: p.hitFlash, isMoving: p.isMoving, walkPhase: p.walkPhase,
       attackActiveTimer: p.attackActiveTimer, isInvulnerable: p.isInvulnerable,
       meleeRange: p.melee && p.melee.range,
+      // Each player's own economy/shop progress and stats — every player
+      // manages their own, see Game.run's getter/setter and buy*'s `actor`
+      // arg. Every connected client receives everyone's, but only ever
+      // renders/spends its own (see applyGuestUIState()/renderGuestShop()).
+      run: p.run, runStats: p.runStats, selectedThrowable: p.selectedThrowable,
     });
     const players = [serializePlayer(this.player, this.network.myId, true)];
     for (const [id, entry] of this.remotePlayers) players.push(serializePlayer(entry.player, id, false));
@@ -2560,7 +2724,6 @@ class Game {
       zoneName: this.zoneName(this.zone),
       waveTotal: this.waveTotalEnemies,
       waveDefeated: this.waveEnemiesDefeated,
-      money: this.run.money,
       finalZone: this.zone,
       finalMoney: Math.max(0, this.moneyThisRun),
       players,
@@ -2578,6 +2741,11 @@ class Game {
         id: b.id, x: b.x, y: b.y, typeId: b.type.id, exploded: b.exploded,
         effectTimer: b.effectTimer, fuseDuration: b.type.fuse,
       })),
+      obstacles: this.obstacles.filter(o => !o.destroyed).map(o => ({
+        id: o.id, x: o.x, y: o.y, radius: o.radius, typeId: o.type.id,
+        hitsTaken: o.hitsTaken, explosionHits: o.explosionHits,
+      })),
+      parkPath: this.parkPath,
       floatingTexts: this.floatingTexts.map(ft => ({
         x: ft.x, y: ft.y, text: ft.text, color: ft.color, life: ft.life, maxLife: ft.maxLife,
       })),
@@ -2608,6 +2776,7 @@ class Game {
     this._snapReceivedAt = now;
 
     this.zone = state.zone; // lets drawBackground()'s darkness-by-zone logic work unmodified
+    this.parkPath = state.parkPath || this.parkPath; // static between regenerations — see drawPark()
     this.applyGuestUIState();
   }
 
@@ -2627,9 +2796,78 @@ class Game {
       document.getElementById("restart-btn").classList.add("hidden");
     } else {
       this.setState("playing");
-      document.getElementById("mp-wait-overlay").classList.toggle("hidden", s.gameState !== "paused" && s.gameState !== "zoneComplete");
+      const shopActive = s.gameState === "paused" || s.gameState === "zoneComplete";
+      // Default to showing the shop the moment the host pauses (fresh rising
+      // edge); guestShopHidden only tracks an explicit choice to hide it
+      // while that same pause is still going on — see input.onToggleMenu.
+      if (shopActive && !this._wasShopActive) this.guestShopHidden = false;
+      this._wasShopActive = shopActive;
+      const me = s.players.find(p => p.id === this.network.myId);
+      if (shopActive && me && !this.guestShopHidden) {
+        document.getElementById("mp-wait-overlay").classList.add("hidden");
+        this.renderGuestShop(me, s.gameState);
+      } else {
+        document.getElementById("upgrade-screen").classList.add("hidden");
+        document.getElementById("mp-wait-overlay").classList.toggle("hidden", !shopActive);
+      }
       this.updateHUDFromSnapshot(s);
     }
+  }
+
+  // Sends a shop purchase to the host, which is the only one that ever
+  // actually spends a run's money — see applyRemoteAction()'s "paused"
+  // branch. Only meaningful while the host has the game paused, exactly
+  // like the local player's own buy buttons only exist inside that same
+  // upgrade-screen overlay.
+  sendBuyAction(action, payload = {}) {
+    this.network.send({ type: "action", action, ...payload });
+  }
+
+  // Guest-side equivalent of openUpgradeMenu(): same #upgrade-screen markup,
+  // populated from `me`'s own snapshot data (`me.run`/`me.runStats`) instead
+  // of the local this.run/this.player, and buy buttons that ship a network
+  // action instead of spending directly — see sendBuyAction() above and the
+  // host's applyRemoteAction(). Only the host's own continue button actually
+  // resumes/advances the zone (host-authoritative, like everything else);
+  // this one just hides the guest's own view of the pause.
+  renderGuestShop(me, gameState) {
+    const run = me.run;
+    // Always make sure it's visible (cheap, idempotent) even when the
+    // rebuild below gets skipped.
+    document.getElementById("upgrade-screen").classList.remove("hidden");
+
+    // Snapshots arrive at ~100Hz but the shop's own contents rarely change —
+    // rebuilding every list's innerHTML on every single one would needlessly
+    // detach buttons the guest is actively hovering/clicking. Skip the
+    // rebuild entirely unless something actually changed since last time.
+    const fingerprint = JSON.stringify([run, me.ammo, me.rangedName, gameState, this.activeShopSection]);
+    if (this._guestShopFingerprint === fingerprint) return;
+    this._guestShopFingerprint = fingerprint;
+
+    const title = document.getElementById("upgrade-title");
+    const subtitle = document.getElementById("upgrade-subtitle");
+    const btn = document.getElementById("upgrade-continue-btn");
+    if (gameState === "zoneComplete") {
+      title.textContent = `Zona ${this.zone} completata!`;
+      subtitle.textContent = "Spendi i tuoi soldi, poi attendi che l'host continui.";
+    } else {
+      title.textContent = "Pausa — Potenzia il tuo personaggio";
+      subtitle.textContent = "In attesa che l'host riprenda la partita.";
+    }
+    btn.textContent = "Nascondi";
+    this.renderShopStats(me);
+    this.applyShopSectionVisibility();
+    this.renderUpgradeList(run, id => this.sendBuyAction("buyHouseUpgrade", { id }));
+    this.renderWeaponList("melee-weapon-list", MELEE_WEAPONS, run.meleeTier, run.meleeWeaponUpgrades, idx => this.sendBuyAction("buyMeleeWeapon", { idx }), run);
+    this.renderWeaponUpgrades("melee-weapon-upgrades-section", "melee-weapon-upgrades", MELEE_WEAPONS, run.meleeTier, run.meleeWeaponUpgrades, id => this.sendBuyAction("buyMeleeWeaponUpgrade", { id }), run);
+    this.renderWeaponList("ranged-weapon-list", RANGED_WEAPONS, run.rangedTier, run.rangedWeaponUpgrades, idx => this.sendBuyAction("buyRangedWeapon", { idx }), run);
+    if (run.rangedTier >= 0) {
+      this.renderWeaponUpgrades("ranged-weapon-upgrades-section", "ranged-weapon-upgrades", RANGED_WEAPONS, run.rangedTier, run.rangedWeaponUpgrades, id => this.sendBuyAction("buyRangedWeaponUpgrade", { id }), run);
+    } else {
+      document.getElementById("ranged-weapon-upgrades-section").classList.add("hidden");
+    }
+    this.renderAmmoShop({ ranged: !!me.rangedName, ammo: me.ammo, run }, () => this.sendBuyAction("buyAmmo"));
+    this.renderBombShop(run, id => this.sendBuyAction("buyBomb", { id }));
   }
 
   // Raw snapshot fields only (flat meleeName/rangedName/ammo, not the
@@ -2645,10 +2883,15 @@ class Game {
       weaponLabel.textContent = me.rangedName
         ? `${me.meleeName} · ${me.rangedName} (${me.ammo}/${me.maxAmmo})`
         : me.meleeName;
+      document.getElementById("aim-stick-base").classList.toggle("hidden", !me.rangedName);
+      // Own money/bomb inventory, not a party-wide figure — see me.run.
+      document.getElementById("money-label").textContent = `€ ${me.run.money}`;
+      const bombType = THROWABLES[me.selectedThrowable || 0];
+      const bombCount = me.run.bombs[bombType.id] || 0;
+      document.getElementById("bomb-label").textContent = `${bombType.name} x${bombCount}`;
     }
     document.getElementById("zone-label").textContent = `Zona ${s.zone} — ${s.zoneName}`;
     document.getElementById("wave-label").textContent = `Nemici rimasti: ${Math.max(0, s.waveTotal - s.waveDefeated)}`;
-    document.getElementById("money-label").textContent = `€ ${s.money}`;
   }
 
   lerp(a, b, t) { return a + (b - a) * t; }
@@ -2706,6 +2949,12 @@ class Game {
       exploded: b.exploded, effectTimer: b.effectTimer, fuse: b.fuseDuration, dead: false,
     });
   }
+  mkObstacle(o) {
+    return Object.assign(Object.create(Obstacle.prototype), {
+      x: o.x, y: o.y, radius: o.radius, type: OBSTACLE_TYPES.find(t => t.id === o.typeId) || OBSTACLE_TYPES[0],
+      hitsTaken: o.hitsTaken, explosionHits: o.explosionHits, destroyed: false,
+    });
+  }
   mkText(ft) {
     return Object.assign(Object.create(FloatingText.prototype), {
       x: ft.x, y: ft.y, text: ft.text, color: ft.color, life: ft.life, maxLife: ft.maxLife,
@@ -2734,8 +2983,8 @@ class Game {
     const z = zone - 1;
     const sc = CONFIG.zoneScaling;
     // Player level grows as upgrades/weapons get bought — a slow extra HP/damage
-    // tax so a fully-kitted-out player doesn't make the run trivially easy.
-    const lvl = this.run.playerLevel || 0;
+    // tax so a fully-kitted-out party doesn't make the run trivially easy.
+    const lvl = this.totalPlayerLevel;
     const levelHpMult = 1 + sc.hpPerPlayerLevel * lvl;
     const levelDamageMult = 1 + sc.damagePerPlayerLevel * lvl;
     return {
@@ -2761,6 +3010,10 @@ class Game {
     this.player.resetForRun();
     this.player.x = CONFIG.width / 2;
     this.player.y = CONFIG.height / 2;
+    // A fresh run means a fresh economy for every connected player, not just
+    // the host — repositionRemotePlayers() below only re-derives loadouts
+    // from whatever run each of them already has.
+    for (const entry of this.remotePlayers.values()) entry.player.run = createRunState();
     this.repositionRemotePlayers();
     this.zone = 1;
     this.moneyThisRun = 0;
@@ -2770,6 +3023,7 @@ class Game {
     this.bombs = [];
     this.player.selectedThrowable = 0;
     this.floatingTexts = [];
+    this.generatePark();
     this.setState("playing");
     this.startZone();
   }
@@ -2786,6 +3040,158 @@ class Game {
     this.enemiesToSpawn = count;
     this.spawnTimer = 0;
     SoundManager.wave();
+  }
+
+  /* =======================================================
+     PARK (obstacles + the paths they line — see OBSTACLE_TYPES)
+  ======================================================= */
+
+  // Shortest distance from (x,y) to the segment (x1,y1)-(x2,y2).
+  distToSegment(x, y, x1, y1, x2, y2) {
+    const dx = x2 - x1, dy = y2 - y1;
+    const lenSq = dx * dx + dy * dy;
+    let t = lenSq > 0 ? ((x - x1) * dx + (y - y1) * dy) / lenSq : 0;
+    t = clamp(t, 0, 1);
+    return dist(x, y, x1 + dx * t, y1 + dy * t);
+  }
+
+  distToPath(x, y) {
+    let best = Infinity;
+    for (let i = 1; i < this.parkPath.length; i++) {
+      const a = this.parkPath[i - 1], b = this.parkPath[i];
+      best = Math.min(best, this.distToSegment(x, y, a.x, a.y, b.x, b.y));
+    }
+    return best;
+  }
+
+  // A gently bent walkway crossing the field corner-to-corner-ish, just so
+  // there's something for path-side furniture to line — see generatePark().
+  // A real drawn path (once the promised art arrives) replaces this purely
+  // visually; the placement logic underneath doesn't change.
+  generateParkPath() {
+    const left = 60, right = CONFIG.width - 60, top = 130, bottom = CONFIG.height - 60;
+    const fromLeft = Math.random() < 0.5;
+    const y1 = rand(top, bottom);
+    const y2 = rand(top, bottom);
+    const midY = clamp((y1 + y2) / 2 + rand(-90, 90), top, bottom);
+    return fromLeft
+      ? [{ x: left, y: y1 }, { x: CONFIG.width / 2, y: midY }, { x: right, y: y2 }]
+      : [{ x: right, y: y1 }, { x: CONFIG.width / 2, y: midY }, { x: left, y: y2 }];
+  }
+
+  // True if (x,y) with the given radius doesn't overlap the path, any
+  // already-placed obstacle, or the players' shared spawn point.
+  parkSpotFree(x, y, radius, minPathDist) {
+    if (this.distToPath(x, y) < minPathDist) return false;
+    if (dist(x, y, CONFIG.width / 2, CONFIG.height / 2) < 90) return false;
+    for (const obs of this.obstacles) {
+      if (dist(x, y, obs.x, obs.y) < radius + obs.radius + 10) return false;
+    }
+    return true;
+  }
+
+  // Fresh random park layout: a walkway plus path-side furniture (benches,
+  // trash cans, lampposts) lining it like real street furniture, and trees/
+  // fences scattered across the rest of the field — see OBSTACLE_TYPES'
+  // `pathSide` flag. Called on every new run and again every 10 zones (see
+  // closeUpgradeMenu()).
+  generatePark() {
+    this.obstacles = [];
+    this.parkPath = this.generateParkPath();
+
+    // Path-side furniture: walk along the path at fixed intervals, offset
+    // to alternating sides, cycling through the three path-side types.
+    const pathSideTypes = OBSTACLE_TYPES.filter(t => t.pathSide);
+    const segLengths = [];
+    let totalLen = 0;
+    for (let i = 1; i < this.parkPath.length; i++) {
+      const a = this.parkPath[i - 1], b = this.parkPath[i];
+      const len = dist(a.x, a.y, b.x, b.y);
+      segLengths.push(len);
+      totalLen += len;
+    }
+    const spacing = 130;
+    let typeIdx = 0;
+    let side = 1;
+    for (let travelled = spacing / 2; travelled < totalLen; travelled += spacing) {
+      let remaining = travelled, segIdx = 0;
+      while (segIdx < segLengths.length - 1 && remaining > segLengths[segIdx]) {
+        remaining -= segLengths[segIdx];
+        segIdx++;
+      }
+      const a = this.parkPath[segIdx], b = this.parkPath[segIdx + 1];
+      const segLen = segLengths[segIdx] || 1;
+      const t = clamp(remaining / segLen, 0, 1);
+      const px = a.x + (b.x - a.x) * t;
+      const py = a.y + (b.y - a.y) * t;
+      // Perpendicular to the segment direction, so furniture sits beside
+      // the path rather than on top of it.
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const segDist = Math.hypot(dx, dy) || 1;
+      const nx = -dy / segDist, ny = dx / segDist;
+      const offset = rand(38, 52) * side;
+      const type = pathSideTypes[typeIdx % pathSideTypes.length];
+      typeIdx++;
+      side *= -1;
+      const x = clamp(px + nx * offset, 30, CONFIG.width - 30);
+      const y = clamp(py + ny * offset, 100, CONFIG.height - 30);
+      if (this.parkSpotFree(x, y, type.radius, 20)) {
+        this.obstacles.push(new Obstacle(type.id, x, y));
+      }
+    }
+
+    // Trees and fences scatter across the rest of the field, clear of the
+    // path itself and everything already placed.
+    const scatterTypes = OBSTACLE_TYPES.filter(t => !t.pathSide);
+    const scatterCount = 10;
+    for (let i = 0; i < scatterCount; i++) {
+      const type = scatterTypes[randInt(0, scatterTypes.length - 1)];
+      let placed = false;
+      for (let attempt = 0; attempt < 20 && !placed; attempt++) {
+        const x = rand(40, CONFIG.width - 40);
+        const y = rand(110, CONFIG.height - 40);
+        if (this.parkSpotFree(x, y, type.radius, 45)) {
+          this.obstacles.push(new Obstacle(type.id, x, y));
+          placed = true;
+        }
+      }
+    }
+  }
+
+  // Pushes `entity` (a Player or Enemy, anything with x/y/radius) back out
+  // of any obstacle it's currently overlapping — the same "solid wall"
+  // treatment as the field's own edges, called right after every movement
+  // update (see Player.update()/Enemy.update()).
+  resolveObstacleCollision(entity) {
+    // Multiple passes: pushing out of one obstacle can reintroduce overlap
+    // with a neighboring one (they're only guaranteed ~10px apart from each
+    // other, see parkSpotFree()) — a single pass could let the entity
+    // "tunnel" partway past one of them in that narrow window. A few passes
+    // converge to a position clear of every obstacle at once.
+    for (let pass = 0; pass < 3; pass++) {
+      for (const obs of this.obstacles) {
+        if (obs.destroyed) continue;
+        const dx = entity.x - obs.x, dy = entity.y - obs.y;
+        const d = Math.hypot(dx, dy);
+        const minD = entity.radius + obs.radius;
+        if (d < minD) {
+          const nx = d > 0 ? dx / d : 1, ny = d > 0 ? dy / d : 0;
+          entity.x = obs.x + nx * minD;
+          entity.y = obs.y + ny * minD;
+        }
+      }
+    }
+  }
+
+  // One grenade/rocket blast centered at (x,y) with the given radius —
+  // every overlapping obstacle takes one explosion hit (see
+  // Obstacle.takeExplosionHit()), called from Bomb.detonate() and the
+  // rocket splash handling in update().
+  explodeObstacles(x, y, radius) {
+    for (const obs of this.obstacles) {
+      if (obs.destroyed) continue;
+      if (dist(x, y, obs.x, obs.y) <= radius + obs.radius) obs.takeExplosionHit();
+    }
   }
 
   spawnEnemy() {
@@ -2847,7 +3253,7 @@ class Game {
   grenadeDamageForZone() {
     const sc = CONFIG.zoneScaling;
     const z = this.zone - 1;
-    const lvl = this.run.playerLevel || 0;
+    const lvl = this.totalPlayerLevel;
     const levelHpMult = 1 + sc.hpPerPlayerLevel * lvl;
     const balordoHpMult = ENEMY_TYPES.find(t => t.id === "balordo").hpMult;
     const baseHpAtZone = CONFIG.enemy.baseMaxHP * (1 + sc.hpPerZone * z) * balordoHpMult * levelHpMult;
@@ -2942,20 +3348,35 @@ class Game {
   damageEnemy(enemy, amount, source = null, weaponId = null) {
     const killed = enemy.takeDamage(amount);
     this.floatingTexts.push(new FloatingText(enemy.x, enemy.y - 20, `-${Math.round(amount)}`, "#ffffff"));
+    if (source) enemy.damageBy.set(source, (enemy.damageBy.get(source) || 0) + amount);
     if (killed) {
       SoundManager.ko();
       const [minM, maxM] = enemy.stats.moneyRange;
-      const moneyBonusFrac = (source || this.player).stats.moneyBonusFrac;
-      const reward = Math.round(randInt(minM, maxM) * (1 + moneyBonusFrac));
-      this.moneyThisRun += reward;
-      this.run.money += reward;
-      this.floatingTexts.push(new FloatingText(enemy.x, enemy.y - 34, `+${reward}€`, "#4fd07a"));
+      const baseReward = randInt(minM, maxM);
+      // Co-op payout: split proportionally to each player's own share of the
+      // total damage this enemy took over its whole lifetime, not just
+      // whoever landed the killing blow — see damageBy above. Falls back to
+      // whoever (or `this.player`, in solo) actually dealt this final hit
+      // if nothing was ever tracked (e.g. it died to a single instant-kill
+      // hit that arrives here with no accumulated history yet).
+      const contributors = enemy.damageBy.size > 0 ? enemy.damageBy : new Map([[source || this.player, amount]]);
+      const totalDamage = [...contributors.values()].reduce((a, b) => a + b, 0);
+      let totalPaid = 0;
+      for (const [player, dmg] of contributors) {
+        const share = dmg / totalDamage;
+        const reward = Math.round(baseReward * share * (1 + player.stats.moneyBonusFrac));
+        if (reward <= 0) continue;
+        player.run.money += reward;
+        player.runStats.moneyEarned += reward;
+        totalPaid += reward;
+      }
+      this.moneyThisRun += totalPaid;
+      this.floatingTexts.push(new FloatingText(enemy.x, enemy.y - 34, `+${totalPaid}€`, "#4fd07a"));
       this.waveEnemiesDefeated++;
       SoundManager.coin();
       this.rollPickupDrop(enemy);
       if (source) {
         source.runStats.kills++;
-        source.runStats.moneyEarned += reward;
         if (weaponId) source.runStats.killsByWeapon[weaponId] = (source.runStats.killsByWeapon[weaponId] || 0) + 1;
       }
     } else {
@@ -3009,15 +3430,17 @@ class Game {
   }
 
   // `actor` is whichever player actually took the hit — see the call site
-  // in update(). The stolen money still comes out of the shared run purse.
+  // in update(). The stolen money comes out of that player's own purse, now
+  // that money is per-player rather than a shared run.
   onPlayerHit(actor = this.player) {
-    if (this.run.money <= 0) return;
+    const run = actor.run;
+    if (run.money <= 0) return;
     const stealFrac = 0.05;
     const reduction = actor.stats.stealReduction;
-    let stolen = Math.round(this.run.money * stealFrac * (1 - reduction));
-    stolen = Math.min(stolen, this.run.money);
+    let stolen = Math.round(run.money * stealFrac * (1 - reduction));
+    stolen = Math.min(stolen, run.money);
     if (stolen > 0) {
-      this.run.money -= stolen;
+      run.money -= stolen;
       this.moneyThisRun -= Math.min(stolen, Math.max(0, this.moneyThisRun));
       this.floatingTexts.push(new FloatingText(actor.x, actor.y - 26, `-${stolen}€ rubati!`, "#d9455f"));
     }
@@ -3051,10 +3474,10 @@ class Game {
     this.applyShopSectionVisibility();
     this.renderUpgradeList();
     this.renderWeaponList("melee-weapon-list", MELEE_WEAPONS, this.run.meleeTier, this.run.meleeWeaponUpgrades, (idx) => this.buyMeleeWeapon(idx));
-    this.renderWeaponUpgrades("melee-weapon-upgrades-section", "melee-weapon-upgrades", MELEE_WEAPONS, this.run.meleeTier, this.run.meleeWeaponUpgrades, (id, cost) => this.buyMeleeWeaponUpgrade(id, cost));
+    this.renderWeaponUpgrades("melee-weapon-upgrades-section", "melee-weapon-upgrades", MELEE_WEAPONS, this.run.meleeTier, this.run.meleeWeaponUpgrades, (id) => this.buyMeleeWeaponUpgrade(id));
     this.renderWeaponList("ranged-weapon-list", RANGED_WEAPONS, this.run.rangedTier, this.run.rangedWeaponUpgrades, (idx) => this.buyRangedWeapon(idx));
     if (this.run.rangedTier >= 0) {
-      this.renderWeaponUpgrades("ranged-weapon-upgrades-section", "ranged-weapon-upgrades", RANGED_WEAPONS, this.run.rangedTier, this.run.rangedWeaponUpgrades, (id, cost) => this.buyRangedWeaponUpgrade(id, cost));
+      this.renderWeaponUpgrades("ranged-weapon-upgrades-section", "ranged-weapon-upgrades", RANGED_WEAPONS, this.run.rangedTier, this.run.rangedWeaponUpgrades, (id) => this.buyRangedWeaponUpgrade(id));
     } else {
       document.getElementById("ranged-weapon-upgrades-section").classList.add("hidden");
     }
@@ -3068,6 +3491,9 @@ class Game {
     document.getElementById("upgrade-screen").classList.add("hidden");
     if (this.menuMode === "zoneComplete") {
       this.zone++;
+      // Every 10 zones the park randomly regenerates — new trees, benches,
+      // paths, etc. (zone 1's own layout comes from startRun/resumeRun).
+      if ((this.zone - 1) % 10 === 0) this.generatePark();
       this.startZone();
     }
     this.state = "playing";
@@ -3078,11 +3504,15 @@ class Game {
     return Math.round(upg.baseCost * Math.pow(upg.growth, level));
   }
 
-  renderUpgradeList() {
+  // `run` defaults to the local/host player's own run for the existing
+  // solo/host flow; a guest's shop passes its own run mirror instead and
+  // `onBuy` sends a network action rather than buying directly — see
+  // renderGuestShop().
+  renderUpgradeList(run = this.run, onBuy = null) {
     const list = document.getElementById("upgrade-list");
     list.innerHTML = "";
     UPGRADES.forEach(upg => {
-      const level = this.run.upgrades[upg.id] || 0;
+      const level = run.upgrades[upg.id] || 0;
       const maxed = level >= upg.maxLevel;
       const cost = maxed ? null : this.costFor(upg, level);
 
@@ -3093,43 +3523,59 @@ class Game {
         <p>${upg.desc}</p>
         <div class="row">
           <span class="level">Lv. ${level}/${upg.maxLevel}</span>
-          <button ${maxed || cost > this.run.money ? "disabled" : ""}>
+          <button ${maxed || cost > run.money ? "disabled" : ""}>
             ${maxed ? "MAX" : `Acquista — ${cost}€`}
           </button>
         </div>
       `;
       if (!maxed) {
         card.querySelector("button").addEventListener("click", () => {
-          if (this.run.money >= cost) {
-            this.run.money -= cost;
-            this.run.upgrades[upg.id] = level + 1;
-            this.run.playerLevel++;
-            this.refreshAllLoadouts();
-            if (upg.id === "firstaid") {
-              // Buying more max HP also tops every player up to at least 3/4
-              // of the new max, instead of just preserving whatever HP was
-              // missing before the purchase (refreshLoadout's default) —
-              // never reduces current HP if it's already higher than that.
-              this.player.hp = Math.max(this.player.hp, Math.round(this.player.maxHp * 0.75));
-              for (const entry of this.remotePlayers.values()) {
-                entry.player.hp = Math.max(entry.player.hp, Math.round(entry.player.maxHp * 0.75));
-              }
-            }
-            this.renderUpgradeList();
-            this.updateHUDStatic();
+          if (run.money >= cost) {
+            if (onBuy) onBuy(upg.id);
+            else this.buyHouseUpgrade(upg.id);
           }
         });
       }
       list.appendChild(card);
     });
-    document.getElementById("upgrade-money").textContent = `€ ${this.run.money}`;
+    document.getElementById("upgrade-money").textContent = `€ ${run.money}`;
+  }
+
+  // House upgrades are individually owned per player — each character's own
+  // life/shield/speed/etc, exactly like their weapons. `actor` is whichever
+  // Player this purchase applies to (defaults to the local/host player;
+  // a guest's purchase supplies their own remotePlayers entry instead — see
+  // applyRemoteAction()).
+  buyHouseUpgrade(id, actor = this.player) {
+    const run = actor.run;
+    const upg = UPGRADES.find(u => u.id === id);
+    const level = run.upgrades[id] || 0;
+    if (!upg || level >= upg.maxLevel) return;
+    const cost = this.costFor(upg, level);
+    if (run.money < cost) return;
+    run.money -= cost;
+    run.upgrades[id] = level + 1;
+    run.playerLevel++;
+    actor.refreshLoadout(run);
+    if (id === "firstaid") {
+      // Buying more max HP also tops the buyer up to at least 3/4 of the new
+      // max, instead of just preserving whatever HP was missing before the
+      // purchase (refreshLoadout's default) — never reduces current HP if
+      // it's already higher than that. Only the buyer, now that HP/upgrades
+      // are per-player instead of shared across the whole party.
+      actor.hp = Math.max(actor.hp, Math.round(actor.maxHp * 0.75));
+    }
+    if (actor === this.player) {
+      this.renderUpgradeList();
+      this.updateHUDStatic();
+    }
   }
 
   // Shared renderer for the sequential melee/ranged weapon tracks: only the
   // next tier is ever purchasable, earlier tiers show as owned, later ones
   // as locked (behind a minimum zone reached this run, or behind fully
   // upgrading the weapon currently in hand).
-  renderWeaponList(containerId, weapons, currentTier, ownedUpgradeIds, onBuy) {
+  renderWeaponList(containerId, weapons, currentTier, ownedUpgradeIds, onBuy, run = this.run) {
     const list = document.getElementById(containerId);
     list.innerHTML = "";
     weapons.forEach((weapon, idx) => {
@@ -3151,7 +3597,7 @@ class Game {
       } else if (zoneLocked) {
         statusHtml = `<span class="level">Bloccata</span><button disabled>Si sblocca alla zona ${weapon.minZone}</button>`;
       } else {
-        const affordable = weapon.cost <= this.run.money;
+        const affordable = weapon.cost <= run.money;
         statusHtml = `<span class="level">&nbsp;</span><button ${affordable ? "" : "disabled"}>Acquista — ${weapon.cost}€</button>`;
       }
 
@@ -3166,7 +3612,7 @@ class Game {
   // Per-tier weapon upgrades (grip/blade/spikes/scope/stock/barrel/mag...),
   // shown for whichever tier is currently equipped. Buying every upgrade
   // here is what unlocks the next weapon tier in the list above.
-  renderWeaponUpgrades(sectionId, containerId, weapons, currentTier, ownedUpgradeIds, onBuyUpgrade) {
+  renderWeaponUpgrades(sectionId, containerId, weapons, currentTier, ownedUpgradeIds, onBuyUpgrade, run = this.run) {
     const weapon = weapons[currentTier];
     const section = document.getElementById(sectionId);
     const container = document.getElementById(containerId);
@@ -3182,7 +3628,7 @@ class Game {
     container.innerHTML = "";
     weapon.upgrades.forEach(upg => {
       const isOwned = owned.has(upg.id);
-      const affordable = upg.cost <= this.run.money;
+      const affordable = upg.cost <= run.money;
       const card = document.createElement("div");
       card.className = "upgrade-card";
       card.innerHTML = `
@@ -3194,74 +3640,98 @@ class Game {
         </div>
       `;
       if (!isOwned) {
-        card.querySelector("button").addEventListener("click", () => onBuyUpgrade(upg.id, upg.cost));
+        card.querySelector("button").addEventListener("click", () => onBuyUpgrade(upg.id));
       }
       container.appendChild(card);
     });
   }
 
-  buyMeleeWeapon(idx) {
+  // Every buy* method below takes an explicit `actor` (defaulting to the
+  // local/host player) so the exact same purchase logic runs whether it's
+  // triggered locally or on behalf of a connected guest — see
+  // applyRemoteAction(). Costs are always re-derived from the static weapon
+  // tables by id/idx, never trusted from the caller, so there's nothing a
+  // guest's client could misreport to buy something cheaper.
+  buyMeleeWeapon(idx, actor = this.player) {
+    const run = actor.run;
     const weapon = MELEE_WEAPONS[idx];
-    const current = MELEE_WEAPONS[this.run.meleeTier];
-    if (idx !== this.run.meleeTier + 1 || this.run.money < weapon.cost) return;
-    if (!allWeaponUpgradesOwned(current, this.run.meleeWeaponUpgrades)) return;
-    this.run.money -= weapon.cost;
-    this.run.meleeTier = idx;
-    this.run.playerLevel++;
-    this.refreshAllLoadouts();
-    this.openUpgradeMenu(this.menuMode);
-    this.updateHUDStatic();
-  }
-
-  buyRangedWeapon(idx) {
-    const weapon = RANGED_WEAPONS[idx];
-    if (idx !== this.run.rangedTier + 1 || this.run.money < weapon.cost) return;
-    if (weapon.minZone && this.zone < weapon.minZone) return;
-    if (this.run.rangedTier >= 0) {
-      const current = RANGED_WEAPONS[this.run.rangedTier];
-      if (!allWeaponUpgradesOwned(current, this.run.rangedWeaponUpgrades)) return;
+    const current = MELEE_WEAPONS[run.meleeTier];
+    if (idx !== run.meleeTier + 1 || run.money < weapon.cost) return;
+    if (!allWeaponUpgradesOwned(current, run.meleeWeaponUpgrades)) return;
+    run.money -= weapon.cost;
+    run.meleeTier = idx;
+    run.playerLevel++;
+    actor.refreshLoadout(run);
+    if (actor === this.player) {
+      this.openUpgradeMenu(this.menuMode);
+      this.updateHUDStatic();
     }
-    this.run.money -= weapon.cost;
-    this.run.rangedTier = idx;
-    this.run.playerLevel++;
-    this.refreshAllLoadouts();
-    this.openUpgradeMenu(this.menuMode);
-    this.updateHUDStatic();
   }
 
-  buyMeleeWeaponUpgrade(id, cost) {
-    if (this.run.meleeWeaponUpgrades.includes(id) || this.run.money < cost) return;
-    this.run.money -= cost;
-    this.run.meleeWeaponUpgrades.push(id);
-    this.run.playerLevel++;
-    this.refreshAllLoadouts();
-    this.openUpgradeMenu(this.menuMode);
-    this.updateHUDStatic();
+  buyRangedWeapon(idx, actor = this.player) {
+    const run = actor.run;
+    const weapon = RANGED_WEAPONS[idx];
+    if (idx !== run.rangedTier + 1 || run.money < weapon.cost) return;
+    if (weapon.minZone && this.zone < weapon.minZone) return;
+    if (run.rangedTier >= 0) {
+      const current = RANGED_WEAPONS[run.rangedTier];
+      if (!allWeaponUpgradesOwned(current, run.rangedWeaponUpgrades)) return;
+    }
+    run.money -= weapon.cost;
+    run.rangedTier = idx;
+    run.playerLevel++;
+    actor.refreshLoadout(run);
+    if (actor === this.player) {
+      this.openUpgradeMenu(this.menuMode);
+      this.updateHUDStatic();
+    }
   }
 
-  buyRangedWeaponUpgrade(id, cost) {
-    if (this.run.rangedWeaponUpgrades.includes(id) || this.run.money < cost) return;
-    this.run.money -= cost;
-    this.run.rangedWeaponUpgrades.push(id);
-    this.run.playerLevel++;
-    this.refreshAllLoadouts();
-    this.openUpgradeMenu(this.menuMode);
-    this.updateHUDStatic();
+  buyMeleeWeaponUpgrade(id, actor = this.player) {
+    const run = actor.run;
+    const weapon = MELEE_WEAPONS[run.meleeTier];
+    const upg = weapon.upgrades && weapon.upgrades.find(u => u.id === id);
+    if (!upg || run.meleeWeaponUpgrades.includes(id) || run.money < upg.cost) return;
+    run.money -= upg.cost;
+    run.meleeWeaponUpgrades.push(id);
+    run.playerLevel++;
+    actor.refreshLoadout(run);
+    if (actor === this.player) {
+      this.openUpgradeMenu(this.menuMode);
+      this.updateHUDStatic();
+    }
+  }
+
+  buyRangedWeaponUpgrade(id, actor = this.player) {
+    const run = actor.run;
+    const weapon = RANGED_WEAPONS[run.rangedTier];
+    const upg = weapon && weapon.upgrades && weapon.upgrades.find(u => u.id === id);
+    if (!upg || run.rangedWeaponUpgrades.includes(id) || run.money < upg.cost) return;
+    run.money -= upg.cost;
+    run.rangedWeaponUpgrades.push(id);
+    run.playerLevel++;
+    actor.refreshLoadout(run);
+    if (actor === this.player) {
+      this.openUpgradeMenu(this.menuMode);
+      this.updateHUDStatic();
+    }
   }
 
   // Ammo is a separate consumable purchase (not a permanent tier): refills
   // the equipped gun's pool by a fixed chunk, capped at its max capacity.
-  renderAmmoShop() {
+  // `playerLike` only needs `.ranged`/`.ammo`/`.run` — a guest's own snapshot
+  // entry is adapted into that same shape by renderGuestShop().
+  renderAmmoShop(playerLike = this.player, onBuy = () => this.buyAmmo()) {
     const section = document.getElementById("ammo-shop-section");
     const container = document.getElementById("ammo-shop");
-    if (!this.player.ranged) {
+    if (!playerLike.ranged) {
       section.classList.add("hidden");
       return;
     }
     section.classList.remove("hidden");
-    const weapon = RANGED_WEAPONS[this.run.rangedTier];
+    const weapon = RANGED_WEAPONS[playerLike.run.rangedTier];
     const cap = weapon.maxAmmo;
-    const current = this.player.ammo;
+    const current = playerLike.ammo;
     const chunk = Math.min(10, cap - current);
     const cost = Math.ceil(chunk * weapon.costPerAmmo);
 
@@ -3273,45 +3743,51 @@ class Game {
       <p>Scorta attuale: ${current}/${cap}</p>
       <div class="row">
         <span class="level">&nbsp;</span>
-        <button ${chunk <= 0 || cost > this.run.money ? "disabled" : ""}>
+        <button ${chunk <= 0 || cost > playerLike.run.money ? "disabled" : ""}>
           ${chunk <= 0 ? "Scorta piena" : `Rifornisci +${chunk} — ${cost}€`}
         </button>
       </div>
     `;
     if (chunk > 0) {
-      card.querySelector("button").addEventListener("click", () => this.buyAmmo());
+      card.querySelector("button").addEventListener("click", () => onBuy());
     }
     container.appendChild(card);
   }
 
-  buyAmmo() {
-    if (!this.player.ranged) return;
-    const weapon = RANGED_WEAPONS[this.run.rangedTier];
-    const chunk = Math.min(10, weapon.maxAmmo - this.player.ammo);
+  buyAmmo(actor = this.player) {
+    if (!actor.ranged) return;
+    const run = actor.run;
+    const weapon = RANGED_WEAPONS[run.rangedTier];
+    const chunk = Math.min(10, weapon.maxAmmo - actor.ammo);
     if (chunk <= 0) return;
     const cost = Math.ceil(chunk * weapon.costPerAmmo);
-    if (this.run.money < cost) return;
-    this.run.money -= cost;
-    this.player.ammo += chunk;
-    this.renderAmmoShop();
-    this.updateHUDStatic();
+    if (run.money < cost) return;
+    run.money -= cost;
+    actor.ammo += chunk;
+    if (actor === this.player) {
+      this.renderAmmoShop();
+      this.updateHUDStatic();
+    }
   }
 
   // Consumable throwables: bought one at a time, stacked up to maxCarry.
   // Base maxCarry plus the flat "Zaino esplosivi" house-upgrade bonus,
-  // applied uniformly to every throwable type.
-  bombCapacityFor(type) {
-    return type.maxCarry + (this.player.stats.bombCapacityBonus || 0);
+  // re-derived straight from `run.upgrades` rather than `player.stats` so it
+  // works identically for a guest's own run mirror.
+  bombCapacityFor(type, run = this.run) {
+    const lvl = run.upgrades.bombCapacity || 0;
+    const bonus = lvl * UPGRADES.find(u => u.id === "bombCapacity").perLevel;
+    return type.maxCarry + bonus;
   }
 
-  renderBombShop() {
+  renderBombShop(run = this.run, onBuy = id => this.buyBomb(id)) {
     const container = document.getElementById("bomb-shop");
     container.innerHTML = "";
     THROWABLES.forEach(type => {
-      const count = this.run.bombs[type.id] || 0;
-      const cap = this.bombCapacityFor(type);
+      const count = run.bombs[type.id] || 0;
+      const cap = this.bombCapacityFor(type, run);
       const atCap = count >= cap;
-      const affordable = type.cost <= this.run.money;
+      const affordable = type.cost <= run.money;
       const card = document.createElement("div");
       card.className = "upgrade-card";
       card.innerHTML = `
@@ -3325,21 +3801,24 @@ class Game {
         </div>
       `;
       if (!atCap) {
-        card.querySelector("button").addEventListener("click", () => this.buyBomb(type.id));
+        card.querySelector("button").addEventListener("click", () => onBuy(type.id));
       }
       container.appendChild(card);
     });
   }
 
-  buyBomb(id) {
+  buyBomb(id, actor = this.player) {
+    const run = actor.run;
     const type = THROWABLES.find(t => t.id === id);
     if (!type) return;
-    const count = this.run.bombs[id] || 0;
-    if (count >= this.bombCapacityFor(type) || this.run.money < type.cost) return;
-    this.run.money -= type.cost;
-    this.run.bombs[id] = count + 1;
-    this.renderBombShop();
-    this.updateHUDStatic();
+    const count = run.bombs[id] || 0;
+    if (count >= this.bombCapacityFor(type, run) || run.money < type.cost) return;
+    run.money -= type.cost;
+    run.bombs[id] = count + 1;
+    if (actor === this.player) {
+      this.renderBombShop();
+      this.updateHUDStatic();
+    }
   }
 
   setState(state) {
@@ -3405,6 +3884,10 @@ class Game {
     const bombType = THROWABLES[this.player.selectedThrowable];
     const bombCount = this.run.bombs[bombType.id] || 0;
     document.getElementById("bomb-label").textContent = `${bombType.name} x${bombCount}`;
+
+    // The aim stick only means anything once there's a ranged weapon to aim
+    // — hidden (and untouchable, display:none) until then.
+    document.getElementById("aim-stick-base").classList.toggle("hidden", !this.player.ranged);
   }
 
   // Guest: no local simulation at all — just poll our own input and ship it
@@ -3441,7 +3924,7 @@ class Game {
 
     if (this.state !== "playing") return;
 
-    this.player.update(dt, this.input);
+    this.player.update(dt, this.input, this);
     // Attack/shoot/dash are held down rather than edge-triggered (there's no
     // "keydown" equivalent for a polled gamepad); their own cooldowns already
     // throttle this the same way holding a keyboard key would. Melee and
@@ -3464,7 +3947,7 @@ class Game {
     // arrive over the socket — see applyRemoteAction.
     for (const entry of this.remotePlayers.values()) {
       if (entry.player.hp <= 0) continue;
-      entry.player.update(dt, entry.input);
+      entry.player.update(dt, entry.input, this);
       entry.player.autoFireRanged(this);
       if (entry.isTouchDevice) entry.player.autoMeleeAttack(this);
     }
@@ -3511,6 +3994,7 @@ class Game {
                   this.damageEnemy(e2, proj.damage, proj.shooter, proj.weaponId);
                 }
               }
+              this.explodeObstacles(proj.x, proj.y, proj.splashRadius);
             } else if (proj.instaKill) {
               // Thrown knife: kills outright regardless of remaining HP.
               this.damageEnemy(enemy, enemy.hp, proj.shooter, proj.weaponId);
@@ -3540,6 +4024,8 @@ class Game {
 
     for (const bomb of this.bombs) bomb.update(dt, this);
     this.bombs = this.bombs.filter(b => !b.dead);
+
+    this.obstacles = this.obstacles.filter(o => !o.destroyed);
 
     for (const ft of this.floatingTexts) ft.update(dt);
     this.floatingTexts = this.floatingTexts.filter(ft => !ft.dead);
@@ -3587,9 +4073,32 @@ class Game {
     }
   }
 
+  // The park's walkway (a simple translucent strip until real art replaces
+  // it) plus every obstacle lining or scattered around it — see
+  // generatePark(). Drawn right after the background so entities always
+  // render on top of it, same as everything else in this game's flat
+  // (non-y-sorted) layering.
+  drawPark(obstacles) {
+    const ctx = this.ctx;
+    if (this.parkPath && this.parkPath.length > 1) {
+      ctx.save();
+      ctx.strokeStyle = "rgba(196, 184, 150, 0.3)";
+      ctx.lineWidth = 34;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.beginPath();
+      ctx.moveTo(this.parkPath[0].x, this.parkPath[0].y);
+      for (let i = 1; i < this.parkPath.length; i++) ctx.lineTo(this.parkPath[i].x, this.parkPath[i].y);
+      ctx.stroke();
+      ctx.restore();
+    }
+    for (const obs of obstacles) obs.draw(ctx);
+  }
+
   draw() {
     if (this.network.isGuest) { this.drawFromSnapshot(); return; }
     this.drawBackground();
+    this.drawPark(this.obstacles);
     for (const bomb of this.bombs) bomb.draw(this.ctx);
     for (const pickup of this.pickups) pickup.draw(this.ctx);
     for (const enemy of this.enemies) enemy.draw(this.ctx);
@@ -3606,6 +4115,7 @@ class Game {
     this.drawBackground();
     const curr = this._snapCurr;
     if (!curr) return;
+    this.drawPark((curr.obstacles || []).map(o => this.mkObstacle(o)));
     const prev = this._snapPrev;
     // How far between the previous and current snapshot "now" sits, based
     // on real elapsed wall-clock time — not on frame count, so it stays
