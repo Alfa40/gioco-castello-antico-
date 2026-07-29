@@ -681,7 +681,7 @@ class FloatingText {
    PROJECTILE (fired by ranged weapons)
 ========================================================= */
 class Projectile {
-  constructor(x, y, angle, speed, damage, owner = "player", splashRadius = 0) {
+  constructor(x, y, angle, speed, damage, owner = "player", splashRadius = 0, shooter = null, weaponId = null) {
     this.id = nextEntityId();
     this.x = x;
     this.y = y;
@@ -692,6 +692,8 @@ class Projectile {
     this.splashRadius = splashRadius; // rocket launcher: area damage on impact instead of a single hit
     this.radius = splashRadius ? 9 : 6;
     this.dead = false;
+    this.shooter = shooter; // Player instance that fired it, for per-player kill/weapon stats
+    this.weaponId = weaponId;
   }
   update(dt) {
     this.x += this.vx * dt;
@@ -768,7 +770,7 @@ class Pickup {
    BOMB (thrown consumables: grenades, molotov, sticky, smoke, stun)
 ========================================================= */
 class Bomb {
-  constructor(type, x, y, stickTarget) {
+  constructor(type, x, y, stickTarget, thrower = null) {
     this.id = nextEntityId();
     this.type = type;
     this.x = x;
@@ -779,6 +781,7 @@ class Bomb {
     this.effectTimer = 0;
     this.tickTimer = 0;
     this.dead = false;
+    this.thrower = thrower; // Player instance that threw it, for per-player kill/weapon stats
   }
 
   update(dt, game) {
@@ -799,7 +802,7 @@ class Bomb {
         this.tickTimer = 0.5;
         for (const enemy of game.enemies) {
           if (!enemy.dead && dist(enemy.x, enemy.y, this.x, this.y) <= this.type.radius) {
-            game.damageEnemy(enemy, this.type.damagePerSecond * 0.5);
+            game.damageEnemy(enemy, this.type.damagePerSecond * 0.5, this.thrower, this.type.id);
           }
         }
       }
@@ -822,7 +825,7 @@ class Bomb {
     if (this.type.kind === "damage") {
       for (const enemy of game.enemies) {
         if (!enemy.dead && dist(enemy.x, enemy.y, this.x, this.y) <= this.type.radius) {
-          game.damageEnemy(enemy, this.type.damage);
+          game.damageEnemy(enemy, this.type.damage, this.thrower, this.type.id);
         }
       }
       this.dead = true;
@@ -887,6 +890,12 @@ class Player {
     this._rangedMaxAmmo = null; // tracks capacity changes from magazine sub-upgrades
 
     this.selectedThrowable = 0; // index into THROWABLES
+
+    // Per-player run stats (kills, money earned, kills by weapon) — shown
+    // on the shop's stats screen; reset alongside everything else in
+    // resetForRun(). Independent of `this.stats` above, which holds
+    // gameplay numbers refreshLoadout() recomputes/replaces wholesale.
+    this.runStats = { kills: 0, moneyEarned: 0, killsByWeapon: {} };
   }
 
   refreshLoadout(run) {
@@ -969,6 +978,7 @@ class Player {
 
   resetForRun() {
     this.hp = this.maxHp;
+    this.runStats = { kills: 0, moneyEarned: 0, killsByWeapon: {} };
   }
 
   healOnNewZone() {
@@ -993,7 +1003,7 @@ class Player {
       if (enemy.dead) continue;
       const d = dist(this.x, this.y, enemy.x, enemy.y);
       if (d > this.melee.range + enemy.radius) continue;
-      game.damageEnemy(enemy, this.melee.damage);
+      game.damageEnemy(enemy, this.melee.damage, this, this.melee.id);
     }
   }
 
@@ -1041,7 +1051,9 @@ class Player {
         a,
         this.ranged.projectileSpeed,
         this.ranged.damage,
-        this.ranged.splashRadius
+        this.ranged.splashRadius,
+        this,
+        this._rangedWeaponId
       );
     }
     SoundManager.shoot();
@@ -1906,8 +1918,10 @@ class Game {
 
     this.state = "menu"; // menu | playing | paused | zoneComplete | gameover
     this.lastTime = performance.now();
+    this.activeShopSection = null; // null | "house" | "melee" | "ranged" | "bombs" — see openUpgradeMenu()/bindShopTabs()
 
     this.bindUI();
+    this.bindShopTabs();
     this.detectTouchDevice();
     this.bindTouchControls();
     this.bindMultiplayerUI();
@@ -1938,6 +1952,51 @@ class Game {
       SoundManager.muted = !SoundManager.muted;
       document.getElementById("mute-btn").textContent = SoundManager.muted ? "🔇" : "🔊";
     });
+  }
+
+  // Each tab toggles its own section open/closed — clicking the active tab
+  // again (or opening a different one) collapses it, so only one section's
+  // content (or none, showing just the stats home screen) is visible at a
+  // time and nothing needs scrolling past to reach it.
+  bindShopTabs() {
+    document.querySelectorAll(".shop-tab-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const section = btn.dataset.section;
+        this.activeShopSection = this.activeShopSection === section ? null : section;
+        this.applyShopSectionVisibility();
+      });
+    });
+  }
+
+  applyShopSectionVisibility() {
+    for (const section of ["house", "melee", "ranged", "bombs"]) {
+      document.getElementById(`shop-section-${section}`).classList.toggle("hidden", this.activeShopSection !== section);
+    }
+    document.querySelectorAll(".shop-tab-btn").forEach(btn => {
+      btn.classList.toggle("active", btn.dataset.section === this.activeShopSection);
+    });
+  }
+
+  // Looks up a weapon/throwable's display name by id, regardless of which
+  // table it lives in — used by renderShopStats() for "arma con più uccisioni".
+  weaponNameById(id) {
+    const all = [...MELEE_WEAPONS, ...RANGED_WEAPONS, ...THROWABLES];
+    const w = all.find(w => w.id === id);
+    return w ? w.name : id;
+  }
+
+  // Home screen of the shop: this run's stats for the player currently
+  // looking at it — see Player.runStats, updated in damageEnemy().
+  renderShopStats() {
+    const stats = this.player.runStats;
+    document.getElementById("stat-zone").textContent = this.zone;
+    document.getElementById("stat-kills").textContent = stats.kills;
+    document.getElementById("stat-money-earned").textContent = `${stats.moneyEarned} €`;
+    let topWeapon = null, topCount = 0;
+    for (const [weaponId, count] of Object.entries(stats.killsByWeapon)) {
+      if (count > topCount) { topCount = count; topWeapon = weaponId; }
+    }
+    document.getElementById("stat-top-weapon").textContent = topWeapon ? `${this.weaponNameById(topWeapon)} (${topCount})` : "—";
   }
 
   // Shows/hides the "Continua partita" button on the start screen depending
@@ -2705,8 +2764,8 @@ class Game {
     this.enemies.push(enemy);
   }
 
-  spawnProjectile(x, y, angle, speed, damage, splashRadius) {
-    this.projectiles.push(new Projectile(x, y, angle, speed, damage, "player", splashRadius));
+  spawnProjectile(x, y, angle, speed, damage, splashRadius, shooter, weaponId) {
+    this.projectiles.push(new Projectile(x, y, angle, speed, damage, "player", splashRadius, shooter, weaponId));
   }
 
   spawnEnemyProjectile(x, y, angle, speed, damage) {
@@ -2743,7 +2802,7 @@ class Game {
       x = clamp(actor.x + Math.cos(angle) * THROW_RANGE, margin, CONFIG.width - margin);
       y = clamp(actor.y + Math.sin(angle) * THROW_RANGE, margin, CONFIG.height - margin);
     }
-    this.bombs.push(new Bomb(type, x, y, stickTarget));
+    this.bombs.push(new Bomb(type, x, y, stickTarget, actor));
     SoundManager.throwBomb();
   }
 
@@ -2781,19 +2840,30 @@ class Game {
     return enemy ? Math.atan2(enemy.y - y, enemy.x - x) : null;
   }
 
-  damageEnemy(enemy, amount) {
+  // `source` is whichever Player instance dealt this particular hit (null
+  // for damage with no clear owner, e.g. leftover fire ticks after the
+  // thrower disconnected) and `weaponId` is the id of the weapon/throwable
+  // that dealt it — both feed the per-player run stats shown in the shop's
+  // stats screen (kills, money earned, weapon with the most kills).
+  damageEnemy(enemy, amount, source = null, weaponId = null) {
     const killed = enemy.takeDamage(amount);
     this.floatingTexts.push(new FloatingText(enemy.x, enemy.y - 20, `-${Math.round(amount)}`, "#ffffff"));
     if (killed) {
       SoundManager.ko();
       const [minM, maxM] = enemy.stats.moneyRange;
-      const reward = Math.round(randInt(minM, maxM) * (1 + this.player.stats.moneyBonusFrac));
+      const moneyBonusFrac = (source || this.player).stats.moneyBonusFrac;
+      const reward = Math.round(randInt(minM, maxM) * (1 + moneyBonusFrac));
       this.moneyThisRun += reward;
       this.run.money += reward;
       this.floatingTexts.push(new FloatingText(enemy.x, enemy.y - 34, `+${reward}€`, "#4fd07a"));
       this.waveEnemiesDefeated++;
       SoundManager.coin();
       this.rollPickupDrop(enemy);
+      if (source) {
+        source.runStats.kills++;
+        source.runStats.moneyEarned += reward;
+        if (weaponId) source.runStats.killsByWeapon[weaponId] = (source.runStats.killsByWeapon[weaponId] || 0) + 1;
+      }
     } else {
       SoundManager.hitEnemy();
     }
@@ -2882,6 +2952,9 @@ class Game {
       subtitle.textContent = "";
       btn.textContent = "Riprendi";
     }
+    this.renderShopStats();
+    this.activeShopSection = null; // always land on the stats home screen first
+    this.applyShopSectionVisibility();
     this.renderUpgradeList();
     this.renderWeaponList("melee-weapon-list", MELEE_WEAPONS, this.run.meleeTier, this.run.meleeWeaponUpgrades, (idx) => this.buyMeleeWeapon(idx));
     this.renderWeaponUpgrades("melee-weapon-upgrades-section", "melee-weapon-upgrades", MELEE_WEAPONS, this.run.meleeTier, this.run.meleeWeaponUpgrades, (id, cost) => this.buyMeleeWeaponUpgrade(id, cost));
@@ -3341,11 +3414,11 @@ class Game {
               SoundManager.explosion();
               for (const e2 of this.enemies) {
                 if (!e2.dead && dist(proj.x, proj.y, e2.x, e2.y) <= proj.splashRadius) {
-                  this.damageEnemy(e2, proj.damage);
+                  this.damageEnemy(e2, proj.damage, proj.shooter, proj.weaponId);
                 }
               }
             } else {
-              this.damageEnemy(enemy, proj.damage);
+              this.damageEnemy(enemy, proj.damage, proj.shooter, proj.weaponId);
             }
             proj.dead = true;
           }
