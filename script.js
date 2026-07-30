@@ -1,88 +1,12 @@
 "use strict";
 
-/* =========================================================
-   CONFIG
-========================================================= */
-const CONFIG = {
-  width: 960,
-  height: 600,
-  maxConcurrentEnemies: 6,
-  spawnInterval: 0.9,
-
-  player: {
-    baseSpeed: 220,
-    baseMaxHP: 500,
-    attackArc: Math.PI * 1.3, // visual swing only; hit detection is a full circle around the player
-    dashSpeed: 640,
-    dashDuration: 0.16,
-    dashCooldown: 1.3,
-    hitInvuln: 0.55,
-    radius: 16,
-  },
-
-  enemy: {
-    baseSpeed: 95,
-    baseMaxHP: 38,
-    baseDamage: 9,
-    attackRange: 32,
-    attackCooldown: 1.15,
-    detectRange: 520,
-    radius: 14,
-    baseMoneyDrop: [20, 36], // doubled from [10, 18]
-  },
-
-  // Pickups dropped by defeated enemies — the run has no progress carried
-  // between playthroughs, so these are the in-run safety net.
-  pickup: {
-    medikitChance: 0.16,
-    medikitHealFraction: 0.25, // of player maxHp
-    ammoChance: 0.22, // only rolled if the player owns a ranged weapon
-    ammoAmountRange: [3, 7],
-    lifespan: 14,
-    radius: 10,
-  },
-
-  // Stretched ~4x from the original curve so the difficulty/money that used
-  // to land around zone 20-30 now lands around zone 80-100, giving a much
-  // longer run to spend the expanded upgrade/weapon content on (see
-  // UPGRADES, MELEE_WEAPONS, RANGED_WEAPONS below).
-  zoneScaling: {
-    speedPerZone: 0.018,
-    hpPerZone: 0.033,
-    damagePerZone: 0.023,
-    cooldownFactorPerZone: 0.011, // reduces cooldown -> faster attacks
-    minCooldown: 0.35,
-    moneyPerZone: 0.025,
-    // Separate, much slower scaling tied to the player's own power (see
-    // Game.playerLevel): the more upgrades/weapons bought, the tougher
-    // enemies get too, so fully kitting out doesn't trivialize the run.
-    // Lower than before in raw terms because there's now ~1.9x more total
-    // purchasable levels (11 house upgrades + 5 sub-upgrades per weapon
-    // tier instead of 6 + 1-4) — this keeps the same overall "fully kitted
-    // out" tax at the new, higher max level instead of taxing much harder.
-    hpPerPlayerLevel: 0.011,
-    damagePerPlayerLevel: 0.011,
-  },
-
-  waves: {
-    baseEnemies: 5,
-    perZone: 2,
-    maxEnemies: 16,
-  },
-
-  zoneNames: [
-    "Ai margini del quartiere",
-    "Vicoli stretti",
-    "Cortili abbandonati",
-    "Il blocco centrale",
-    "Zona rossa",
-    "Il fondo del quartiere",
-    "Oltre i confini conosciuti",
-    "Il centro città in fiamme",
-    "Le torri abbandonate",
-    "L'ultimo isolato",
-  ],
-};
+// CONFIG, OBJECT_TYPES/objectDamageStage, UPGRADES/MELEE_WEAPONS/
+// RANGED_WEAPONS/THROWABLES/ENEMY_TYPES, clamp/rand/randInt/dist,
+// createRunState/normalizeRun, and every gameplay class (FloatingText,
+// Projectile, Pickup, Bomb, Player, Enemy, RemoteInputState, Simulation)
+// now live in simulation.js, loaded just before this file (see index.html)
+// — they're still ordinary globals here, shared between the two classic
+// <script> tags exactly as if this were still one file.
 
 // Top-down pixel-art sprites, pre-baked as PNGs with real alpha transparency
 // (the black backgrounds from generation were chroma-keyed out offline, not
@@ -113,6 +37,13 @@ const SPRITE_SOURCES = {
   shotgun: "generated-images/pixel/weapon_shotgun.png",
   rocket: "generated-images/pixel/weapon_rocket.png",
 };
+// Park obstacles: 5 damage-stage sprites per object type (1 = intatto, 5 =
+// quasi distrutto — see OBJECT_TYPES / objectDamageStage / ART_STYLE.md).
+for (const name of Object.keys(OBJECT_TYPES)) {
+  for (let stage = 1; stage <= 5; stage++) {
+    SPRITE_SOURCES[`object_${name}_${stage}`] = `generated-images/pixel/object_${name}_${stage}.png`;
+  }
+}
 
 const Sprites = {
   ready: {},
@@ -165,403 +96,6 @@ function drawSpriteFit(ctx, img, targetMax, yOffset = 0) {
   return { w, h };
 }
 
-const UPGRADES = [
-  {
-    id: "gym",
-    name: "Palestra in cantina",
-    desc: "Aumenta il danno dei tuoi colpi.",
-    baseCost: 40,
-    growth: 1.45,
-    maxLevel: 10,
-    perLevel: 3, // + damage
-  },
-  {
-    id: "shoes",
-    name: "Scarpe buone",
-    desc: "Aumenta velocità di movimento e scatto.",
-    baseCost: 35,
-    growth: 1.4,
-    maxLevel: 10,
-    perLevel: 0.045, // multiplier bonus
-  },
-  {
-    id: "jacket",
-    name: "Giubbotto rinforzato",
-    desc: "Riduce il danno che subisci.",
-    baseCost: 45,
-    growth: 1.48,
-    maxLevel: 10,
-    perLevel: 0.075, // damage reduction fraction — 10 levels exactly reach the 0.75 clamp in refreshLoadout()
-  },
-  {
-    id: "firstaid",
-    name: "Kit pronto soccorso",
-    desc: "Aumenta i punti vita massimi.",
-    baseCost: 50,
-    growth: 1.42,
-    maxLevel: 15,
-    perLevel: 500 / 15, // + max hp — 15 levels reach exactly 1000 total (500 base + 500)
-  },
-  {
-    id: "safe",
-    name: "Cassaforte",
-    desc: "Riduce i soldi che i criminali riescono a rubarti.",
-    baseCost: 55,
-    growth: 1.48,
-    maxLevel: 10,
-    perLevel: 0.09, // steal reduction fraction — 10 levels exactly reach the 0.9 clamp in refreshLoadout()
-  },
-  {
-    id: "door",
-    name: "Porta blindata",
-    desc: "Recuperi un po' di vita all'inizio di ogni zona.",
-    baseCost: 75,
-    growth: 1.6,
-    maxLevel: 10,
-    perLevel: 0.09, // fraction of missing hp healed on new zone — 10 levels exactly reach the 0.9 clamp in refreshLoadout()
-  },
-  {
-    id: "bombCapacity",
-    name: "Zaino esplosivi",
-    desc: "Aumenta la scorta massima di ogni esplosivo.",
-    baseCost: 300,
-    growth: 1.5,
-    maxLevel: 5,
-    perLevel: 1, // + maxCarry, applied uniformly to every throwable type
-  },
-  {
-    id: "dashCooldown",
-    name: "Scatto potenziato",
-    desc: "Riduce il tempo di recupero dello scatto.",
-    baseCost: 200,
-    growth: 1.5,
-    maxLevel: 8,
-    perLevel: 0.08, // fraction of base dashCooldown shaved off — clamped to 0.65 total in refreshLoadout()
-  },
-  {
-    id: "moneyBonus",
-    name: "Fortuna del quartiere",
-    desc: "Aumenta i soldi guadagnati dai nemici sconfitti.",
-    baseCost: 250,
-    growth: 1.5,
-    maxLevel: 10,
-    perLevel: 0.04, // + fraction of money earned per kill
-  },
-  {
-    id: "hitInvuln",
-    name: "Riflessi rapidi",
-    desc: "Allunga l'invulnerabilità appena dopo essere colpito.",
-    baseCost: 220,
-    growth: 1.5,
-    maxLevel: 8,
-    perLevel: 0.05, // + seconds added to CONFIG.player.hitInvuln
-  },
-  {
-    id: "meleeSpeed",
-    name: "Adrenalina",
-    desc: "Riduce il tempo di recupero degli attacchi in mischia, con qualunque arma bianca.",
-    baseCost: 260,
-    growth: 1.5,
-    maxLevel: 8,
-    perLevel: 0.035, // fraction of melee cooldown shaved off — clamped to 0.5 total in refreshLoadout()
-  },
-];
-
-// Sequential melee tiers: each purchase replaces the previous weapon. Every
-// tier (but fists) has 1-2 small sub-upgrades that must ALL be bought before
-// the next tier becomes purchasable. Within the same archetype (knife -> better
-// knife, bat -> pole) a fully upgraded tier still stays behind the next tier's
-// base stats, so there's always a reason to move on; across the knife -> bat
-// jump the comparison is apples-to-oranges by design (knives trade range for
-// attack speed, bats/poles trade speed for reach and burst), so a maxed-out
-// knife can out-DPS a stock bat in a straight line — the bat's case is its
-// much longer reach against groups, not raw single-target DPS.
-const MELEE_WEAPONS = [
-  {
-    id: "fists", name: "Pugni", desc: "Le tue mani. Gratis, ma poco convincenti.",
-    cost: 0, damage: 18, range: 52, cooldown: 0.42, upgrades: [],
-  },
-  {
-    id: "knife1", name: "Coltello", desc: "Taglia in fretta: più danno e colpi più veloci.",
-    cost: 60, damage: 26, range: 50, cooldown: 0.32,
-    upgrades: [
-      { id: "knife1_grip", name: "Impugnatura migliorata", desc: "Colpi leggermente più veloci.", cost: 20, cooldownMult: 0.94 },
-      { id: "knife1_blade", name: "Lama più affilata", desc: "Più danno per colpo.", cost: 25, damage: 4 },
-      { id: "knife1_pommel", name: "Pomello bilanciato", desc: "Colpi ancora più veloci.", cost: 20, cooldownMult: 0.94 },
-      { id: "knife1_edge", name: "Filo rifinito", desc: "Più danno per colpo.", cost: 25, damage: 4 },
-      { id: "knife1_reach", name: "Lama allungata", desc: "Colpisce leggermente più lontano.", cost: 20, range: 6 },
-    ],
-  },
-  {
-    id: "knife2", name: "Coltello a serramanico", desc: "Lama migliore: ancora più danno e velocità.",
-    cost: 140, damage: 36, range: 50, cooldown: 0.24,
-    upgrades: [
-      { id: "knife2_grip", name: "Impugnatura rinforzata", desc: "Colpi ancora più veloci.", cost: 45, cooldownMult: 0.94 },
-      { id: "knife2_blade", name: "Lama temprata", desc: "Più danno per colpo.", cost: 55, damage: 6 },
-      { id: "knife2_pommel", name: "Pomello zavorrato", desc: "Colpi ancora più veloci.", cost: 45, cooldownMult: 0.94 },
-      { id: "knife2_edge", name: "Filo damascato", desc: "Più danno per colpo.", cost: 55, damage: 6 },
-      { id: "knife2_reach", name: "Lama allungata", desc: "Colpisce leggermente più lontano.", cost: 40, range: 6 },
-    ],
-  },
-  {
-    id: "bat", name: "Mazza da baseball", desc: "Più lenta, ma colpisce molto più lontano e più forte.",
-    cost: 260, damage: 50, range: 78, cooldown: 0.55,
-    upgrades: [
-      { id: "bat_grip", name: "Impugnatura fasciata", desc: "Colpi leggermente più veloci.", cost: 70, cooldownMult: 0.95 },
-      { id: "bat_spikes", name: "Mazza chiodata", desc: "Chiodi che aumentano il danno.", cost: 90, damage: 10 },
-      { id: "bat_counterweight", name: "Contrappeso", desc: "Colpi leggermente più veloci.", cost: 70, cooldownMult: 0.95 },
-      { id: "bat_corked", name: "Corpo rinforzato", desc: "Più danno per colpo.", cost: 90, damage: 10 },
-      { id: "bat_handle", name: "Manico allungato", desc: "Colpisce leggermente più lontano.", cost: 70, range: 8 },
-    ],
-  },
-  {
-    id: "pole", name: "Palo d'acciaio", desc: "Portata e danno massimi tra le lame e i pali. Non fa sconti.",
-    cost: 420, damage: 75, range: 94, cooldown: 0.6,
-    upgrades: [
-      { id: "pole_grip", name: "Impugnatura antiscivolo", desc: "Colpi leggermente più veloci.", cost: 110, cooldownMult: 0.95 },
-      { id: "pole_reinforced", name: "Palo rinforzato", desc: "Struttura rinforzata: ancora più danno.", cost: 140, damage: 15 },
-      { id: "pole_counterweight", name: "Bilanciamento", desc: "Colpi leggermente più veloci.", cost: 110, cooldownMult: 0.95 },
-      { id: "pole_tempered", name: "Acciaio temprato", desc: "Più danno per colpo.", cost: 140, damage: 15 },
-      { id: "pole_extended", name: "Palo allungato", desc: "Colpisce leggermente più lontano.", cost: 110, range: 10 },
-    ],
-  },
-  {
-    id: "hammer", name: "Martello", desc: "Il colpo più pesante di tutti: lentissimo da rialzare, ma devastante.",
-    cost: 650, damage: 105, range: 86, cooldown: 0.78,
-    upgrades: [
-      { id: "hammer_grip", name: "Manico ammortizzato", desc: "Colpi leggermente più veloci.", cost: 170, cooldownMult: 0.96 },
-      { id: "hammer_head", name: "Testa rinforzata", desc: "Testa più pesante: ancora più danno.", cost: 210, damage: 20 },
-      { id: "hammer_counterbalance", name: "Bilanciamento", desc: "Colpi leggermente più veloci.", cost: 170, cooldownMult: 0.96 },
-      { id: "hammer_forged", name: "Acciaio forgiato", desc: "Più danno per colpo.", cost: 210, damage: 20 },
-      { id: "hammer_handle", name: "Manico allungato", desc: "Colpisce leggermente più lontano.", cost: 170, range: 10 },
-    ],
-  },
-];
-
-// Ranged weapons are a separate, optional loadout slot (key F) unlocked once
-// the current run has reached a deep enough zone. Also sequential, also
-// gated behind fully upgrading the current gun. Each has a capped ammo pool
-// (no unlimited spray) refilled by kills or the zone shop.
-const RANGED_WEAPONS = [
-  {
-    id: "pistol", name: "Pistola", desc: "Colpisce a distanza. Cadenza moderata.",
-    cost: 220, damage: 22, cooldown: 0.6, projectileSpeed: 560, minZone: 12, maxAmmo: 24, costPerAmmo: 6,
-    upgrades: [
-      { id: "pistol_sight", name: "Mirino", desc: "Aggancia i bersagli con più margine.", cost: 80, aimConeBonus: 0.06 },
-      { id: "pistol_stock", name: "Calcio", desc: "Cadenza di fuoco più rapida.", cost: 90, cooldownMult: 0.9 },
-      { id: "pistol_barrel", name: "Canna lunga", desc: "Più danno per colpo.", cost: 100, damage: 5 },
-      { id: "pistol_mag", name: "Caricatore esteso", desc: "Più munizioni massime.", cost: 70, maxAmmo: 8 },
-      { id: "pistol_rifling", name: "Canna rigata", desc: "Ancora più danno per colpo.", cost: 90, damage: 4 },
-    ],
-  },
-  {
-    id: "smg", name: "Mitra", desc: "Raffica rapida, danno per colpo minore.",
-    cost: 480, damage: 13, cooldown: 0.14, projectileSpeed: 640, minZone: 20, maxAmmo: 60, costPerAmmo: 4,
-    upgrades: [
-      { id: "smg_sight", name: "Mirino", desc: "Aggancia i bersagli con più margine.", cost: 150, aimConeBonus: 0.06 },
-      { id: "smg_stock", name: "Calcio", desc: "Cadenza di fuoco più rapida.", cost: 170, cooldownMult: 0.9 },
-      { id: "smg_barrel", name: "Canna lunga", desc: "Più danno per colpo.", cost: 190, damage: 3 },
-      { id: "smg_mag", name: "Caricatore esteso", desc: "Più munizioni massime.", cost: 140, maxAmmo: 15 },
-      { id: "smg_rifling", name: "Canna rigata", desc: "Ancora più danno per colpo.", cost: 160, damage: 3 },
-    ],
-  },
-  {
-    id: "sniper", name: "Cecchino", desc: "Un colpo lentissimo ma devastante: quasi sempre un one-shot.",
-    cost: 850, damage: 90, cooldown: 1.4, projectileSpeed: 900, minZone: 28, maxAmmo: 8, costPerAmmo: 25,
-    upgrades: [
-      { id: "sniper_sight", name: "Mirino", desc: "Aggancia i bersagli con più margine.", cost: 220, aimConeBonus: 0.05 },
-      { id: "sniper_stock", name: "Calcio", desc: "Cadenza di fuoco più rapida.", cost: 260, cooldownMult: 0.88 },
-      { id: "sniper_barrel", name: "Canna lunga", desc: "Più danno per colpo.", cost: 300, damage: 20 },
-      { id: "sniper_mag", name: "Caricatore esteso", desc: "Più munizioni massime.", cost: 200, maxAmmo: 3 },
-      { id: "sniper_rifling", name: "Canna rigata", desc: "Ancora più danno per colpo.", cost: 260, damage: 15 },
-    ],
-  },
-  // Fires several pellets per colpo in un piccolo cono: `damage` è il danno
-  // di ogni singolo pallino, non del colpo intero — vicino fa malissimo,
-  // a distanza i pallini si allargano e mancano più facilmente il bersaglio.
-  {
-    id: "shotgun", name: "Shotgun", desc: "Spara una rosa di pallini: devastante da vicino, un solo colpo per cartuccia.",
-    cost: 1300, damage: 14, cooldown: 0.9, projectileSpeed: 520, minZone: 36, maxAmmo: 20, costPerAmmo: 10,
-    pellets: 6, spread: Math.PI / 9,
-    upgrades: [
-      { id: "shotgun_sight", name: "Mirino", desc: "Aggancia i bersagli con più margine.", cost: 200, aimConeBonus: 0.06 },
-      { id: "shotgun_stock", name: "Calcio", desc: "Cadenza di fuoco più rapida.", cost: 220, cooldownMult: 0.9 },
-      { id: "shotgun_barrel", name: "Canna lunga", desc: "Più danno per pallino.", cost: 240, damage: 4 },
-      { id: "shotgun_mag", name: "Caricatore esteso", desc: "Più cartucce massime.", cost: 170, maxAmmo: 6 },
-      { id: "shotgun_rifling", name: "Canna rigata", desc: "Ancora più danno per pallino.", cost: 200, damage: 3 },
-    ],
-  },
-  // splashRadius: al contatto esplode danneggiando tutti i nemici nel raggio,
-  // non solo quello colpito — vedi la gestione dedicata in Game.update().
-  {
-    id: "rocket", name: "Lanciarazzi", desc: "Razzo lento ma con danno ad area enorme: spazza via gruppi interi.",
-    cost: 2200, damage: 140, cooldown: 1.8, projectileSpeed: 380, minZone: 44, maxAmmo: 4, costPerAmmo: 60,
-    splashRadius: 90,
-    upgrades: [
-      { id: "rocket_sight", name: "Mirino", desc: "Aggancia i bersagli con più margine.", cost: 400, aimConeBonus: 0.08 },
-      { id: "rocket_stock", name: "Calcio", desc: "Cadenza di fuoco più rapida.", cost: 450, cooldownMult: 0.85 },
-      { id: "rocket_barrel", name: "Canna lunga", desc: "Più danno d'esplosione.", cost: 500, damage: 30 },
-      { id: "rocket_mag", name: "Caricatore esteso", desc: "Più razzi massimi.", cost: 350, maxAmmo: 2 },
-      { id: "rocket_rifling", name: "Canna rigata", desc: "Ancora più danno d'esplosione.", cost: 420, damage: 25 },
-    ],
-  },
-];
-
-// Consumable throwables, bought in stacks (not sequential tiers). Most land
-// at a fixed point along the aim direction and detonate there (see
-// Game.throwBomb / class Bomb) — knife and shuriken are the exception,
-// flagged `isProjectileThrow`: those actually fly like a bullet (see
-// Game.throwBomb's projectile branch and class Projectile's instaKill/homing).
-const THROWABLES = [
-  // damage: a placeholder baseline — the thrown amount is actually computed
-  // per-zone at throw time (see Game.grenadeDamageForZone) so it reliably
-  // one-shots "base" enemies without ever one-shotting the tankier Bruto,
-  // at any zone.
-  { id: "grenade", name: "Granata", desc: "Esplosione che infligge danno pesante in un'area: uccide i nemici base, ma non il Bruto.", cost: 600, kind: "damage", radius: 75, damage: 70, fuse: 1.1, maxCarry: 5 },
-  { id: "molotov", name: "Molotov", desc: "Crea una pozza di fuoco che brucia chiunque ci passi sopra per qualche secondo.", cost: 700, kind: "fire", radius: 100, damagePerSecond: 22, duration: 5, fuse: 0.6, maxCarry: 5 },
-  { id: "sticky", name: "Bomba adesiva", desc: "Si attacca al primo nemico colpito ed esplode con danno enorme.", cost: 1500, kind: "damage", radius: 55, damage: 130, fuse: 1.4, maxCarry: 4, sticky: true },
-  // blindRadius: distanza da un giocatore entro cui un nemico "accecato"
-  // continua comunque a comportarsi normalmente (troppo vicino per perdersi
-  // nel fumo) — vedi Enemy.update()'s ccType === "smoke" branch.
-  { id: "smoke", name: "Granata fumogena", desc: "Acceca i nemici nella nube: chi non è a un passo da un giocatore vaga a caso invece di inseguire.", cost: 650, kind: "cc", ccType: "smoke", radius: 150, blindRadius: 10, duration: 4, fuse: 0.5, maxCarry: 4 },
-  { id: "flashbang", name: "Granata stordente", desc: "Stordisce i nemici vicini, bloccando ogni loro movimento per qualche secondo.", cost: 800, kind: "cc", ccType: "stun", radius: 75, duration: 2.5, fuse: 0.4, maxCarry: 4 },
-  { id: "throwknife", name: "Coltello da lancio", desc: "Vola dritto e uccide all'istante il primo nemico che colpisce.", cost: 200, kind: "damage", isProjectileThrow: true, instaKill: true, projectileSpeed: 700, maxCarry: 8 },
-  { id: "shuriken", name: "Shuriken", desc: "Vola veloce e insegue leggermente il nemico più vicino alla sua traiettoria.", cost: 500, kind: "damage", isProjectileThrow: true, homing: true, projectileSpeed: 560, damage: 40, maxCarry: 10 },
-];
-const THROW_RANGE = 260;
-const THROW_CONE = Math.PI / 6;
-const HOMING_TURN_RATE = 2.2; // max radians/second a homing projectile can curve — "insegue leggermente", not a lock-on
-const SMOKE_BLIND_RADIUS = THROWABLES.find(t => t.id === "smoke").blindRadius; // cached once — see Enemy.update()'s ccType === "smoke" branch
-
-// Three enemy archetypes with distinct movement/attack behavior, not just
-// stat multipliers, so they read as different threats at a glance.
-const ENEMY_TYPES = [
-  {
-    id: "balordo",
-    label: "Balordo",
-    color: "#8a7355",
-    radiusMult: 1.12,
-    speedMult: 0.72,
-    hpMult: 1.25,
-    damageMult: 1.0,
-    cooldownMult: 1.0,
-    behavior: "steady", // predictable, direct pursuit — the baseline threat
-    minZone: 1,
-    weight: (zone) => Math.max(0.15, 1.4 - zone * 0.12),
-  },
-  {
-    id: "nervoso",
-    label: "Nervoso",
-    color: "#e0703d",
-    radiusMult: 0.9,
-    speedMult: 1.4,
-    hpMult: 0.8,
-    damageMult: 1.05,
-    cooldownMult: 0.7,
-    behavior: "aggressive", // beelines at you and swings fast
-    minZone: 1,
-    weight: (zone) => 0.4 + zone * 0.1,
-  },
-  {
-    id: "imprevedibile",
-    label: "Imprevedibile",
-    color: "#9b59d0",
-    radiusMult: 1.0,
-    speedMult: 1.1,
-    hpMult: 0.9,
-    damageMult: 1.0,
-    cooldownMult: 0.85,
-    behavior: "erratic", // darts around, doesn't reliably chase
-    minZone: 3,
-    weight: (zone) => (zone < 3 ? 0 : 0.25 + (zone - 3) * 0.15),
-  },
-  {
-    id: "bruto",
-    label: "Bruto",
-    color: "#5c2626",
-    radiusMult: 1.5,
-    speedMult: 0.42,
-    hpMult: 1.6,
-    damageMult: 2.3,
-    cooldownMult: 1.3, // heavy wind-up between hits, to offset how hard they land
-    behavior: "steady", // direct pursuit, same as Balordo, just much slower and scarier
-    minZone: 4,
-    weight: (zone) => (zone < 4 ? 0 : 0.18 + (zone - 4) * 0.05),
-  },
-  {
-    id: "tiratore",
-    label: "Tiratore",
-    color: "#4a6b7a",
-    radiusMult: 0.85,
-    speedMult: 0.85,
-    hpMult: 0.55, // fragile — the threat is the gun, not a melee trade
-    damageMult: 0.8, // low melee fallback damage if it gets cornered
-    cooldownMult: 1.0,
-    behavior: "ranged",
-    minZone: 5,
-    preferredRange: 260,
-    projectileSpeed: 420,
-    projectileDamageMult: 1.0,
-    attackRangeOverride: 260, // used as the firing range for this type, not melee reach
-    detectRangeOverride: 420,
-    weight: (zone) => (zone < 5 ? 0 : 0.15 + (zone - 5) * 0.07),
-  },
-  {
-    id: "driveby",
-    label: "Quelli del drive by",
-    color: "#3a3f4a",
-    radiusMult: 1.7,
-    speedMult: 2.6,
-    hpMult: 0.5, // fragile, but it's on screen only a couple of seconds
-    damageMult: 1.4, // multiplies the projectile damage it fires while passing through
-    cooldownMult: 0.5, // fires roughly twice as often during its transit
-    behavior: "driveby", // straight-line pass through the field, no chase/melee at all — see Enemy.updateDriveby
-    minZone: 6,
-    projectileSpeed: 480,
-    moneyMult: 5, // juicy bonus if you manage to shoot the car down before it leaves
-    weight: (zone) => (zone < 6 ? 0 : 0.12 + (zone - 6) * 0.04),
-  },
-];
-
-// Aggregates the purchased per-tier upgrades of a weapon into flat stat deltas.
-function sumWeaponUpgrades(weaponEntry, ownedIds) {
-  const owned = new Set(ownedIds || []);
-  const totals = { damage: 0, range: 0, cooldownMult: 1, maxAmmo: 0, aimConeBonus: 0 };
-  for (const upg of weaponEntry.upgrades || []) {
-    if (!owned.has(upg.id)) continue;
-    if (upg.damage) totals.damage += upg.damage;
-    if (upg.range) totals.range += upg.range;
-    if (upg.cooldownMult) totals.cooldownMult *= upg.cooldownMult;
-    if (upg.maxAmmo) totals.maxAmmo += upg.maxAmmo;
-    if (upg.aimConeBonus) totals.aimConeBonus += upg.aimConeBonus;
-  }
-  return totals;
-}
-
-function allWeaponUpgradesOwned(weaponEntry, ownedIds) {
-  if (!weaponEntry) return true; // no current weapon (e.g. no ranged weapon owned yet) — nothing to gate on
-  const owned = new Set(ownedIds || []);
-  return (weaponEntry.upgrades || []).every(u => owned.has(u.id));
-}
-
-function pickEnemyType(zone) {
-  const candidates = ENEMY_TYPES.filter(t => zone >= t.minZone);
-  const total = candidates.reduce((sum, t) => sum + t.weight(zone), 0);
-  let roll = rand(0, total);
-  for (const t of candidates) {
-    roll -= t.weight(zone);
-    if (roll <= 0) return t;
-  }
-  return candidates[candidates.length - 1];
-}
-
-/* =========================================================
-   UTILS
-========================================================= */
-function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
-function rand(min, max) { return min + Math.random() * (max - min); }
-function randInt(min, max) { return Math.floor(rand(min, max + 1)); }
-function dist(ax, ay, bx, by) { return Math.hypot(ax - bx, ay - by); }
 /* =========================================================
    SOUND (tiny synthesized SFX, no external assets)
 ========================================================= */
@@ -603,32 +137,17 @@ const SoundManager = {
   wave() { this.beep(220, 0.3, "triangle", 0.06); },
   gameover() { this.beep(80, 0.5, "sawtooth", 0.08); },
 };
-
-/* =========================================================
-   RUN STATE
-   Nothing here survives a death — money, upgrades and weapons only exist
-   for the current playthrough. Dying resets everything to zero.
-========================================================= */
-function createRunState() {
-  const upgrades = {};
-  UPGRADES.forEach(u => { upgrades[u.id] = 0; });
-  return {
-    money: 0,
-    upgrades,
-    meleeTier: 0,
-    rangedTier: -1,
-    meleeWeaponUpgrades: [], // ids of purchased per-tier weapon upgrades
-    rangedWeaponUpgrades: [],
-    bombs: {}, // { [throwableId]: count }
-    playerLevel: 0, // grows with power purchases; feeds a slow extra enemy scaling
-  };
-}
+// Points the simulation code's sound calls (see simulation.js) at this real
+// implementation — it defaults to a silent no-op otherwise, which is what
+// runs server-side once the simulation also runs in Node (see server.js).
+setSound(SoundManager);
 
 /* =========================================================
    SAVE / RESUME
-   The run only survives a death via this snapshot — see createRunState's own
-   comment. Saved whenever the game actually pauses (see Game.openUpgradeMenu),
-   so closing the tab mid-fight loses that wave but never the shop progress.
+   The run only survives a death via this snapshot — see createRunState's
+   own comment (simulation.js). Saved whenever the game actually pauses
+   (see Game.openUpgradeMenu), so closing the tab mid-fight loses that wave
+   but never the shop progress.
 ========================================================= */
 const SAVE_KEY = "crazyTownSave";
 
@@ -651,943 +170,6 @@ function loadRunState() {
 
 function clearRunState() {
   try { localStorage.removeItem(SAVE_KEY); } catch (e) {}
-}
-
-// Stable per-entity ids (Enemy/Projectile/Pickup/Bomb) so a multiplayer guest
-// can match the same entity across two snapshots and interpolate its motion
-// instead of teleporting it — see Game.sendSnapshot/drawFromSnapshot.
-let _nextEntityId = 1;
-function nextEntityId() { return _nextEntityId++; }
-
-/* =========================================================
-   FLOATING TEXT (damage numbers, loot popups)
-========================================================= */
-class FloatingText {
-  constructor(x, y, text, color) {
-    this.x = x;
-    this.y = y;
-    this.text = text;
-    this.color = color;
-    this.life = 0.8;
-    this.maxLife = 0.8;
-    this.vy = -40;
-  }
-  update(dt) {
-    this.y += this.vy * dt;
-    this.life -= dt;
-  }
-  get dead() { return this.life <= 0; }
-  draw(ctx) {
-    const alpha = clamp(this.life / this.maxLife, 0, 1);
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.fillStyle = this.color;
-    ctx.font = "bold 14px system-ui, sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText(this.text, this.x, this.y);
-    ctx.restore();
-  }
-}
-
-/* =========================================================
-   PROJECTILE (fired by ranged weapons)
-========================================================= */
-class Projectile {
-  constructor(x, y, angle, speed, damage, owner = "player", splashRadius = 0, shooter = null, weaponId = null, instaKill = false, homing = false) {
-    this.id = nextEntityId();
-    this.x = x;
-    this.y = y;
-    this.vx = Math.cos(angle) * speed;
-    this.vy = Math.sin(angle) * speed;
-    this.damage = damage;
-    this.owner = owner; // "player" | "enemy" — decides who it can hit
-    this.splashRadius = splashRadius; // rocket launcher: area damage on impact instead of a single hit
-    this.radius = splashRadius ? 9 : 6;
-    this.dead = false;
-    this.shooter = shooter; // Player instance that fired it, for per-player kill/weapon stats
-    this.weaponId = weaponId;
-    this.instaKill = instaKill; // thrown knife: kills whatever it touches outright, see the collision handling in Game.update()
-    this.homing = homing; // shuriken: curves gently toward the nearest enemy ahead of it, see update() below
-  }
-  update(dt, enemies) {
-    if (this.homing && enemies && enemies.length) {
-      const speed = Math.hypot(this.vx, this.vy) || 1;
-      const dirX = this.vx / speed, dirY = this.vy / speed;
-      // "Nemico più vicino alla traiettoria": among enemies still ahead of
-      // the projectile, the one with the smallest perpendicular distance to
-      // its current flight line — not simply the closest one overall.
-      let best = null, bestPerp = Infinity;
-      for (const e of enemies) {
-        if (e.dead) continue;
-        const ex = e.x - this.x, ey = e.y - this.y;
-        const along = ex * dirX + ey * dirY;
-        if (along <= 0) continue;
-        const perp = Math.abs(ex * dirY - ey * dirX);
-        if (perp < bestPerp) { bestPerp = perp; best = e; }
-      }
-      if (best) {
-        const desired = Math.atan2(best.y - this.y, best.x - this.x);
-        const current = Math.atan2(this.vy, this.vx);
-        let diff = desired - current;
-        while (diff > Math.PI) diff -= Math.PI * 2;
-        while (diff < -Math.PI) diff += Math.PI * 2;
-        const maxTurn = HOMING_TURN_RATE * dt;
-        const turned = current + clamp(diff, -maxTurn, maxTurn);
-        this.vx = Math.cos(turned) * speed;
-        this.vy = Math.sin(turned) * speed;
-      }
-    }
-    this.x += this.vx * dt;
-    this.y += this.vy * dt;
-    if (this.x < -20 || this.x > CONFIG.width + 20 || this.y < -20 || this.y > CONFIG.height + 20) {
-      this.dead = true;
-    }
-  }
-  draw(ctx) {
-    ctx.save();
-    ctx.fillStyle = this.owner === "enemy" ? "#ff6a6a" : this.splashRadius ? "#ff8a3d" : "#ffe27a";
-    ctx.beginPath();
-    ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-  }
-}
-
-/* =========================================================
-   PICKUP (medikit / ammo, dropped by defeated enemies)
-========================================================= */
-class Pickup {
-  constructor(x, y, kind, amount) {
-    this.id = nextEntityId();
-    this.x = x;
-    this.y = y;
-    this.kind = kind; // "health" | "ammo"
-    this.amount = amount;
-    this.radius = CONFIG.pickup.radius;
-    this.life = CONFIG.pickup.lifespan;
-    this.dead = false;
-  }
-  update(dt) {
-    this.life -= dt;
-    if (this.life <= 0) this.dead = true;
-  }
-  draw(ctx) {
-    const alpha = this.life < 2 ? clamp(this.life / 2, 0.15, 1) : 1;
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    if (this.kind === "health") {
-      ctx.fillStyle = "#3ddc71";
-      ctx.beginPath();
-      ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = "#0c3d1e";
-      ctx.lineWidth = 2;
-      ctx.stroke();
-      ctx.strokeStyle = "#ffffff";
-      ctx.lineWidth = 2.5;
-      ctx.beginPath();
-      ctx.moveTo(this.x - 4, this.y); ctx.lineTo(this.x + 4, this.y);
-      ctx.moveTo(this.x, this.y - 4); ctx.lineTo(this.x, this.y + 4);
-      ctx.stroke();
-    } else {
-      ctx.fillStyle = "#ffd24a";
-      ctx.beginPath();
-      ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = "#5c4108";
-      ctx.lineWidth = 2;
-      ctx.stroke();
-      ctx.fillStyle = "#5c4108";
-      ctx.font = "bold 10px system-ui, sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText("A", this.x, this.y + 0.5);
-    }
-    ctx.restore();
-  }
-}
-
-/* =========================================================
-   BOMB (thrown consumables: grenades, molotov, sticky, smoke, stun)
-========================================================= */
-class Bomb {
-  constructor(type, x, y, stickTarget, thrower = null, damageOverride = null) {
-    this.id = nextEntityId();
-    this.type = type;
-    this.x = x;
-    this.y = y;
-    this.stickTarget = stickTarget || null; // Enemy instance the sticky bomb is riding, if any
-    this.fuse = type.fuse;
-    this.exploded = false;
-    this.effectTimer = 0;
-    this.tickTimer = 0;
-    this.dead = false;
-    this.thrower = thrower; // Player instance that threw it, for per-player kill/weapon stats
-    // Grenade only: its damage is computed per-zone at throw time (see
-    // Game.grenadeDamageForZone) instead of a flat table value, so it keeps
-    // one-shotting "base" enemies without also one-shotting the Bruto no
-    // matter how far the run has progressed.
-    this.damageOverride = damageOverride;
-  }
-
-  update(dt, game) {
-    if (this.stickTarget && !this.stickTarget.dead) {
-      this.x = this.stickTarget.x;
-      this.y = this.stickTarget.y;
-    }
-
-    if (!this.exploded) {
-      this.fuse -= dt;
-      if (this.fuse <= 0) this.detonate(game);
-      return;
-    }
-
-    if (this.type.kind === "fire") {
-      this.tickTimer -= dt;
-      if (this.tickTimer <= 0) {
-        this.tickTimer = 0.5;
-        for (const enemy of game.enemies) {
-          if (!enemy.dead && dist(enemy.x, enemy.y, this.x, this.y) <= this.type.radius) {
-            game.damageEnemy(enemy, this.type.damagePerSecond * 0.5, this.thrower, this.type.id);
-          }
-        }
-      }
-    } else if (this.type.kind === "cc") {
-      for (const enemy of game.enemies) {
-        if (!enemy.dead && dist(enemy.x, enemy.y, this.x, this.y) <= this.type.radius) {
-          enemy.ccTimer = this.type.duration;
-          enemy.ccType = this.type.ccType;
-        }
-      }
-    }
-
-    this.effectTimer -= dt;
-    if (this.effectTimer <= 0) this.dead = true;
-  }
-
-  detonate(game) {
-    this.exploded = true;
-    SoundManager.explosion();
-    if (this.type.kind === "damage") {
-      const dmg = this.damageOverride != null ? this.damageOverride : this.type.damage;
-      for (const enemy of game.enemies) {
-        if (!enemy.dead && dist(enemy.x, enemy.y, this.x, this.y) <= this.type.radius) {
-          game.damageEnemy(enemy, dmg, this.thrower, this.type.id);
-        }
-      }
-      this.dead = true;
-    } else {
-      this.effectTimer = this.type.duration;
-    }
-  }
-
-  draw(ctx) {
-    if (!this.exploded) {
-      ctx.save();
-      ctx.fillStyle = this.type.kind === "fire" ? "#ff8a3d" : this.type.kind === "cc" ? "#9fb0bd" : "#3a3a3a";
-      ctx.beginPath();
-      ctx.arc(this.x, this.y, 7, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = "#000000aa";
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
-      ctx.restore();
-      return;
-    }
-    if (this.dead) return;
-    ctx.save();
-    const frac = clamp(this.effectTimer / this.type.duration, 0, 1);
-    ctx.globalAlpha = 0.25 + frac * 0.35;
-    ctx.fillStyle = this.type.kind === "fire" ? "#ff5a2a" : this.type.ccType === "stun" ? "#ffe27a" : "#c7d3da";
-    ctx.beginPath();
-    ctx.arc(this.x, this.y, this.type.radius, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-  }
-}
-
-/* =========================================================
-   PLAYER
-========================================================= */
-class Player {
-  constructor(x, y) {
-    this.x = x;
-    this.y = y;
-    this.facing = -Math.PI / 2; // up — movement direction, drives melee swing & dash
-    this.aimAngle = this.facing; // where the ranged weapon points; right stick overrides, else follows facing
-    this.radius = CONFIG.player.radius;
-
-    this.attackCooldownTimer = 0;
-    this.attackActiveTimer = 0;
-    this.rangedCooldownTimer = 0;
-    this.dashTimer = 0;
-    this.dashCooldownTimer = 0;
-    this.invulnTimer = 0;
-    this.hitFlash = 0;
-    this.isMoving = false;
-    this.walkPhase = 0;
-
-    this.hp = 100;
-    this.maxHp = 100;
-    this.stats = null; // computed from upgrades
-    this.melee = null; // computed from equipped melee weapon
-    this.ranged = null; // computed from equipped ranged weapon, or null if unarmed
-    this.ammo = 0; // rounds currently carried for the equipped ranged weapon
-    this._rangedWeaponId = null; // tracks tier changes so ammo only refills on upgrade, not on every stat refresh
-    this._rangedMaxAmmo = null; // tracks capacity changes from magazine sub-upgrades
-
-    this.selectedThrowable = 0; // index into THROWABLES
-
-    // Per-player run stats (kills, money earned, kills by weapon) — shown
-    // on the shop's stats screen; reset alongside everything else in
-    // resetForRun(). Independent of `this.stats` above, which holds
-    // gameplay numbers refreshLoadout() recomputes/replaces wholesale.
-    this.runStats = { kills: 0, moneyEarned: 0, killsByWeapon: {} };
-  }
-
-  refreshLoadout(run) {
-    const lvl = id => run.upgrades[id] || 0;
-    const cfg = CONFIG.player;
-
-    const gymBonus = lvl("gym") * UPGRADES.find(u => u.id === "gym").perLevel;
-    const speedMult = 1 + lvl("shoes") * UPGRADES.find(u => u.id === "shoes").perLevel;
-    const defReduction = lvl("jacket") * UPGRADES.find(u => u.id === "jacket").perLevel;
-    const hpBonus = lvl("firstaid") * UPGRADES.find(u => u.id === "firstaid").perLevel;
-    const stealReduction = lvl("safe") * UPGRADES.find(u => u.id === "safe").perLevel;
-    const doorHeal = lvl("door") * UPGRADES.find(u => u.id === "door").perLevel;
-    const bombCapacityBonus = lvl("bombCapacity") * UPGRADES.find(u => u.id === "bombCapacity").perLevel;
-    const dashCooldownReduction = clamp(lvl("dashCooldown") * UPGRADES.find(u => u.id === "dashCooldown").perLevel, 0, 0.65);
-    const moneyBonusFrac = lvl("moneyBonus") * UPGRADES.find(u => u.id === "moneyBonus").perLevel;
-    const hitInvulnBonus = lvl("hitInvuln") * UPGRADES.find(u => u.id === "hitInvuln").perLevel;
-    const meleeSpeedReduction = clamp(lvl("meleeSpeed") * UPGRADES.find(u => u.id === "meleeSpeed").perLevel, 0, 0.5);
-
-    const prevMax = this.maxHp;
-    this.maxHp = Math.round(cfg.baseMaxHP + hpBonus);
-    if (this.hp === 0 || prevMax === undefined) this.hp = this.maxHp;
-    else this.hp = clamp(this.hp + (this.maxHp - (prevMax || this.maxHp)), 0, this.maxHp);
-
-    this.stats = {
-      speed: cfg.baseSpeed * speedMult,
-      dashSpeed: cfg.dashSpeed * speedMult,
-      defReduction: clamp(defReduction, 0, 0.75),
-      stealReduction: clamp(stealReduction, 0, 0.9),
-      doorHealFraction: clamp(doorHeal, 0, 0.9),
-      bombCapacityBonus,
-      dashCooldown: cfg.dashCooldown * (1 - dashCooldownReduction),
-      moneyBonusFrac,
-      hitInvuln: cfg.hitInvuln + hitInvulnBonus,
-    };
-
-    const meleeWeapon = MELEE_WEAPONS[run.meleeTier || 0];
-    const meleeBonus = sumWeaponUpgrades(meleeWeapon, run.meleeWeaponUpgrades);
-    const meleeCooldown = meleeWeapon.cooldown * meleeBonus.cooldownMult * (1 - meleeSpeedReduction);
-    this.melee = {
-      id: meleeWeapon.id,
-      name: meleeWeapon.name,
-      damage: meleeWeapon.damage + gymBonus + meleeBonus.damage,
-      range: meleeWeapon.range + meleeBonus.range,
-      cooldown: meleeCooldown,
-      activeTime: Math.min(0.18, meleeCooldown * 0.4),
-    };
-
-    const rangedIdx = run.rangedTier;
-    if (rangedIdx != null && rangedIdx >= 0 && RANGED_WEAPONS[rangedIdx]) {
-      const rw = RANGED_WEAPONS[rangedIdx];
-      const rangedBonus = sumWeaponUpgrades(rw, run.rangedWeaponUpgrades);
-      const newMaxAmmo = rw.maxAmmo + rangedBonus.maxAmmo;
-      if (this._rangedWeaponId !== rw.id) {
-        // Newly acquired or upgraded gun: hand it over freshly loaded.
-        this.ammo = newMaxAmmo;
-        this._rangedWeaponId = rw.id;
-      } else if (this._rangedMaxAmmo != null && newMaxAmmo > this._rangedMaxAmmo) {
-        // Same gun, but a magazine sub-upgrade just extended its capacity.
-        this.ammo += newMaxAmmo - this._rangedMaxAmmo;
-      }
-      this._rangedMaxAmmo = newMaxAmmo;
-      this.ranged = {
-        name: rw.name,
-        damage: rw.damage + gymBonus * 0.5 + rangedBonus.damage,
-        cooldown: rw.cooldown * rangedBonus.cooldownMult,
-        projectileSpeed: rw.projectileSpeed,
-        maxAmmo: newMaxAmmo,
-        aimConeBonus: rangedBonus.aimConeBonus,
-        pellets: rw.pellets || 1,
-        spread: rw.spread || 0,
-        splashRadius: rw.splashRadius || 0,
-      };
-    } else {
-      this.ranged = null;
-      this._rangedWeaponId = null;
-      this._rangedMaxAmmo = null;
-      this.ammo = 0;
-    }
-  }
-
-  resetForRun() {
-    this.hp = this.maxHp;
-    this.runStats = { kills: 0, moneyEarned: 0, killsByWeapon: {} };
-  }
-
-  healOnNewZone() {
-    if (!this.stats) return;
-    const missing = this.maxHp - this.hp;
-    this.hp = clamp(this.hp + missing * this.stats.doorHealFraction, 0, this.maxHp);
-  }
-
-  get isDashing() { return this.dashTimer > 0; }
-  get isInvulnerable() { return this.invulnTimer > 0; }
-
-  tryAttack(game) {
-    if (this.attackCooldownTimer > 0) return;
-    this.attackCooldownTimer = this.melee.cooldown;
-    this.attackActiveTimer = this.melee.activeTime;
-    SoundManager.attack();
-
-    // Hits everything in range around the player (short-range swing), not just
-    // a narrow cone: with several enemies closing in from different sides at
-    // once, requiring pixel-perfect facing made the fight unplayable.
-    for (const enemy of game.enemies) {
-      if (enemy.dead) continue;
-      const d = dist(this.x, this.y, enemy.x, enemy.y);
-      if (d > this.melee.range + enemy.radius) continue;
-      game.damageEnemy(enemy, this.melee.damage, this, this.melee.id);
-    }
-  }
-
-  // Touch-only hands-free melee: the touch attack button was replaced by the
-  // aim stick (see index.html/bindAimStick), so on touch devices melee fires
-  // on its own whenever an enemy is within range, mirroring how ranged
-  // auto-fire already works. Keyboard/gamepad melee stays manual (Space/Cross).
-  autoMeleeAttack(game) {
-    if (this.attackCooldownTimer > 0) return;
-    const inRange = game.enemies.some(e => !e.dead && dist(this.x, this.y, e.x, e.y) <= this.melee.range + e.radius);
-    if (inRange) this.tryAttack(game);
-  }
-
-  // Manual trigger (F key / R2): fires along the current aim even if nothing
-  // is lined up, snapping onto a nearby enemy within a narrow cone if there is one.
-  tryRangedAttack(game) {
-    if (!this.ranged || this.rangedCooldownTimer > 0) return;
-    if (this.ammo <= 0) { SoundManager.emptyClick(); return; }
-    const angle = game.aimAssist(this.x, this.y, this.aimAngle, this.ranged.aimConeBonus);
-    this.fireRanged(game, angle);
-  }
-
-  // Hands-free auto-fire, like a mobile shooter: as long as the aim (right
-  // stick, or facing when it's centered) is actually resting on an enemy in
-  // range, the gun keeps firing on its own — no trigger needed.
-  autoFireRanged(game) {
-    if (!this.ranged || this.rangedCooldownTimer > 0 || this.ammo <= 0) return;
-    const angle = game.findAutoFireAngle(this.x, this.y, this.aimAngle, this.ranged.aimConeBonus);
-    if (angle === null) return;
-    this.fireRanged(game, angle);
-  }
-
-  fireRanged(game, angle) {
-    this.rangedCooldownTimer = this.ranged.cooldown;
-    this.ammo--;
-    const muzzle = this.radius + 8;
-    const pellets = this.ranged.pellets;
-    for (let i = 0; i < pellets; i++) {
-      // Single-pellet weapons fire straight down `angle`; multi-pellet ones
-      // (shotgun) fan out evenly across `spread`, centered on it.
-      const a = pellets > 1 ? angle + (i / (pellets - 1) - 0.5) * this.ranged.spread : angle;
-      game.spawnProjectile(
-        this.x + Math.cos(a) * muzzle,
-        this.y + Math.sin(a) * muzzle,
-        a,
-        this.ranged.projectileSpeed,
-        this.ranged.damage,
-        this.ranged.splashRadius,
-        this,
-        this._rangedWeaponId
-      );
-    }
-    SoundManager.shoot();
-  }
-
-  tryDash() {
-    if (this.dashCooldownTimer > 0 || this.isDashing) return;
-    this.dashTimer = CONFIG.player.dashDuration;
-    this.dashCooldownTimer = this.stats.dashCooldown;
-    this.invulnTimer = Math.max(this.invulnTimer, CONFIG.player.dashDuration + 0.1);
-    SoundManager.dash();
-  }
-
-  takeDamage(amount) {
-    if (this.isInvulnerable) return false;
-    const reduced = amount * (1 - this.stats.defReduction);
-    this.hp = clamp(this.hp - reduced, 0, this.maxHp);
-    this.invulnTimer = this.stats.hitInvuln;
-    this.hitFlash = 0.25;
-    SoundManager.hitPlayer();
-    return true;
-  }
-
-  update(dt, input) {
-    if (this.attackCooldownTimer > 0) this.attackCooldownTimer -= dt;
-    if (this.attackActiveTimer > 0) this.attackActiveTimer -= dt;
-    if (this.rangedCooldownTimer > 0) this.rangedCooldownTimer -= dt;
-    if (this.dashCooldownTimer > 0) this.dashCooldownTimer -= dt;
-    if (this.invulnTimer > 0) this.invulnTimer -= dt;
-    if (this.hitFlash > 0) this.hitFlash -= dt;
-
-    // True 360° direction when the input device offers one (gamepad stick,
-    // touch joystick); keyboard has no analog direction, so it falls back
-    // to the old 8-way (up/down/left/right, diagonals normalized) combo.
-    let mx = 0, my = 0;
-    const analogMove = input.moveVec;
-    if (analogMove) {
-      const mag = Math.hypot(analogMove.x, analogMove.y) || 1;
-      mx = analogMove.x / mag;
-      my = analogMove.y / mag;
-    } else {
-      if (input.isDown("left")) mx -= 1;
-      if (input.isDown("right")) mx += 1;
-      if (input.isDown("up")) my -= 1;
-      if (input.isDown("down")) my += 1;
-      const len = Math.hypot(mx, my);
-      if (len > 0) { mx /= len; my /= len; }
-    }
-
-    const moving = mx !== 0 || my !== 0;
-    if (moving) this.facing = Math.atan2(my, mx);
-    this.isMoving = moving;
-    this.walkPhase = moving ? this.walkPhase + dt * 10 : 0;
-
-    // Right stick (gamepad) or aim stick (touch), if tilted, aims
-    // independently of movement; otherwise the aim just follows facing,
-    // which keeps keyboard-only play unchanged.
-    const stickAim = input.gpAim || input.touchAim;
-    this.aimAngle = stickAim ? Math.atan2(stickAim.y, stickAim.x) : this.facing;
-
-    if (this.dashTimer > 0) {
-      this.dashTimer -= dt;
-      const dx = Math.cos(this.facing) * this.stats.dashSpeed * dt;
-      const dy = Math.sin(this.facing) * this.stats.dashSpeed * dt;
-      this.x += dx; this.y += dy;
-    } else if (moving) {
-      this.x += mx * this.stats.speed * dt;
-      this.y += my * this.stats.speed * dt;
-    }
-
-    const margin = this.radius + 6;
-    this.x = clamp(this.x, margin, CONFIG.width - margin);
-    this.y = clamp(this.y, margin + 60, CONFIG.height - margin);
-  }
-
-  draw(ctx) {
-    ctx.save();
-    ctx.translate(this.x, this.y);
-
-    if (this.isInvulnerable && Math.floor(performance.now() / 60) % 2 === 0) {
-      ctx.globalAlpha = 0.5;
-    }
-
-    // attack swing arc
-    if (this.attackActiveTimer > 0) {
-      ctx.save();
-      ctx.rotate(this.facing);
-      ctx.fillStyle = "rgba(232, 163, 61, 0.35)";
-      ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.arc(0, 0, this.melee.range, -CONFIG.player.attackArc / 2, CONFIG.player.attackArc / 2);
-      ctx.closePath();
-      ctx.fill();
-      ctx.restore();
-    }
-
-    // body: bird's-eye top-down head sprite (rotated to facing, with a small
-    // walk bob) once loaded, falling back to the original vector circle
-    // until then
-    const sprite = Sprites.get("player");
-    if (sprite) {
-      const bob = this.isMoving ? Math.sin(this.walkPhase) * 3 : 0;
-      const size = this.radius * 2.3;
-      ctx.save();
-      ctx.rotate(this.facing + Math.PI / 2); // sprite art faces "up" by default
-      const { w, h } = drawSpriteFit(ctx, sprite, size, bob);
-      if (this.hitFlash > 0) {
-        ctx.globalCompositeOperation = "source-atop";
-        ctx.fillStyle = `rgba(255, 90, 90, ${Math.min(0.6, this.hitFlash * 2)})`;
-        ctx.fillRect(-w / 2, -h / 2 + bob, w, h);
-        ctx.globalCompositeOperation = "source-over";
-      }
-      ctx.restore();
-    } else {
-      ctx.fillStyle = this.hitFlash > 0 ? "#ff8080" : "#4fa1e8";
-      ctx.beginPath();
-      ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = "#1c2b3d";
-      ctx.lineWidth = 2;
-      ctx.stroke();
-    }
-
-    // Weapon overlay: a single hand+weapon icon (authored pointing "up",
-    // hand at the bottom), offset forward of the head so it reads as an arm
-    // reaching out in the aim/facing direction. Every weapon but the fists
-    // is also offset to the side (held out beside the body); the fists stay
-    // centered, like a guard stance in front of the face rather than off to
-    // one side. Shows the ranged weapon (rotated to aim, independent of body
-    // facing) when one is equipped, otherwise the current melee weapon
-    // (rotated with facing, like the body).
-    const weaponId = this.ranged ? this._rangedWeaponId : (this.melee && this.melee.id);
-    const weaponSprite = weaponId && Sprites.get(weaponId);
-    if (weaponSprite) {
-      const weaponAngle = this.ranged ? this.aimAngle : this.facing;
-      const size = this.radius * 2.6;
-      const sideOffset = weaponId === "fists" ? 0 : this.radius * 0.5;
-      ctx.save();
-      ctx.rotate(weaponAngle + Math.PI / 2 - (WEAPON_SPRITE_ANGLE_CORRECTION[weaponId] || 0));
-      ctx.translate(sideOffset, -this.radius * 0.6);
-      drawSpriteFit(ctx, weaponSprite, size);
-      ctx.restore();
-    }
-
-    // aim indicator: only meaningful with a ranged weapon, and only worth
-    // drawing separately from facing when it actually points elsewhere
-    if (this.ranged && Math.abs(this.aimAngle - this.facing) > 0.05) {
-      const aimLen = this.radius * 1.2 + this.melee.range * 0.25 + 14;
-      ctx.strokeStyle = "#ffd24a";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.lineTo(Math.cos(this.aimAngle) * aimLen, Math.sin(this.aimAngle) * aimLen);
-      ctx.stroke();
-    }
-
-    ctx.restore();
-  }
-}
-
-/* =========================================================
-   ENEMY
-========================================================= */
-class Enemy {
-  constructor(x, y, stats, type) {
-    this.id = nextEntityId();
-    this.x = x;
-    this.y = y;
-    this.type = type;
-    this.radius = CONFIG.enemy.radius * (type.radiusMult || 1);
-    this.stats = stats;
-    this.hp = stats.maxHP;
-    this.maxHp = stats.maxHP;
-    this.attackCooldownTimer = rand(0, 0.4);
-    this.dead = false;
-    this.hitFlash = 0;
-    this.facing = -Math.PI / 2; // default facing until movement/AI takes over
-    this.isMoving = false;
-    this.walkPhase = 0;
-
-    // "steady" / "aggressive" behavior
-    this.jitterAngle = rand(0, Math.PI * 2);
-    this.jitterTimer = rand(0, 1);
-
-    // "erratic" behavior
-    this.moveDir = { x: 0, y: 0 };
-    this.moveSpeedMult = 1;
-    this.erraticTimer = rand(0, 0.3);
-
-    // "ranged" behavior
-    this.strafeDir = Math.random() < 0.5 ? -1 : 1;
-
-    // "driveby" behavior — set by Game.spawnDriveby right after construction
-    this.drivebyDir = 1;
-
-    // crowd control from smoke/stun bombs
-    this.ccTimer = 0;
-    this.ccType = null; // "smoke" | "stun"
-  }
-
-  update(dt, player, game) {
-    if (this.dead) return;
-    if (this.attackCooldownTimer > 0) this.attackCooldownTimer -= dt;
-    if (this.hitFlash > 0) this.hitFlash -= dt;
-
-    if (this.type.behavior === "driveby") {
-      this.updateDriveby(dt, player, game);
-      return; // ignores CC, separation and the normal field-boundary clamp entirely
-    }
-
-    if (this.ccTimer > 0) {
-      this.ccTimer -= dt;
-      if (this.ccType === "smoke") {
-        // Blinded, not frozen: loses track of whichever player is nearest
-        // and wanders instead of hunting — unless that player is right on
-        // top of it anyway, too close for the smoke to matter.
-        if (dist(this.x, this.y, player.x, player.y) > SMOKE_BLIND_RADIUS) {
-          this.wanderRandomly(dt);
-          return;
-        }
-      } else {
-        this.isMoving = false;
-        return; // stunned: frozen in place for the duration
-      }
-    }
-
-    const d = dist(this.x, this.y, player.x, player.y);
-    this.isMoving = false;
-
-    if (this.type.behavior === "ranged") {
-      this.updateRanged(dt, player, game, d);
-    } else if (d <= this.stats.attackRange + this.radius) {
-      this.facing = Math.atan2(player.y - this.y, player.x - this.x);
-      if (this.attackCooldownTimer <= 0) {
-        this.attackCooldownTimer = this.stats.attackCooldown;
-        const hit = player.takeDamage(this.stats.damage);
-        if (hit) game.onPlayerHit(player);
-      }
-    } else {
-      this.moveTowardBehavior(dt, player, d);
-    }
-
-    this.walkPhase = this.isMoving ? this.walkPhase + dt * 10 : 0;
-
-    // simple separation from other enemies
-    for (const other of game.enemies) {
-      if (other === this || other.dead) continue;
-      const od = dist(this.x, this.y, other.x, other.y);
-      const minD = this.radius + other.radius + 4;
-      if (od > 0 && od < minD) {
-        const push = (minD - od) / minD;
-        const ax = (this.x - other.x) / od;
-        const ay = (this.y - other.y) / od;
-        this.x += ax * push * 40 * dt;
-        this.y += ay * push * 40 * dt;
-      }
-    }
-
-    const margin = this.radius + 4;
-    this.x = clamp(this.x, margin, CONFIG.width - margin);
-    this.y = clamp(this.y, margin + 60, CONFIG.height - margin);
-  }
-
-  // Straight-line pass across the field: never turns, never melees, just
-  // fires at the player on a timer until it drives off the far edge. Cooldown
-  // and hit-flash timers are already ticked down by the caller (update()).
-  updateDriveby(dt, player, game) {
-    this.x += this.drivebyDir * this.stats.speed * dt;
-    this.isMoving = true;
-
-    if (this.attackCooldownTimer <= 0) {
-      this.attackCooldownTimer = this.stats.attackCooldown;
-      const angle = Math.atan2(player.y - this.y, player.x - this.x);
-      game.spawnEnemyProjectile(this.x, this.y, angle, this.type.projectileSpeed, this.stats.damage);
-    }
-
-    if (this.x < -60 || this.x > CONFIG.width + 60) {
-      this.dead = true;
-      game.onDrivebyExit();
-    }
-  }
-
-  // Slow, aimless wandering used by any behavior below once the player is
-  // beyond its detectRange, so an "undetected" enemy looks alive instead of
-  // frozen in place, without revealing where the player actually is. The
-  // driveby car ignores detectRange entirely (see updateDriveby) and the
-  // erratic behavior already has its own near-identical far-away wander
-  // built in (see moveTowardBehavior), so neither calls this.
-  wanderRandomly(dt) {
-    this.erraticTimer -= dt;
-    if (this.erraticTimer <= 0) {
-      this.erraticTimer = rand(0.6, 1.4);
-      const a = rand(0, Math.PI * 2);
-      this.moveDir = { x: Math.cos(a), y: Math.sin(a) };
-    }
-    this.x += this.moveDir.x * this.stats.speed * 0.4 * dt;
-    this.y += this.moveDir.y * this.stats.speed * 0.4 * dt;
-    this.isMoving = true;
-    this.facing = Math.atan2(this.moveDir.y, this.moveDir.x);
-  }
-
-  // Kites to stay near its preferred range instead of closing to melee, and
-  // fires a projectile at the player whenever it's within firing range.
-  updateRanged(dt, player, game, d) {
-    if (d > this.stats.detectRange) { this.wanderRandomly(dt); return; } // hasn't noticed the player yet
-
-    const pref = this.type.preferredRange;
-    let dx = player.x - this.x, dy = player.y - this.y;
-    const len = Math.hypot(dx, dy) || 1;
-    dx /= len; dy /= len;
-
-    let dir = 0; // -1 retreat, 1 approach, 0 hold position
-    if (d < pref * 0.75) dir = -1;
-    else if (d > pref * 1.25) dir = 1;
-
-    if (dir !== 0) {
-      this.x += dx * dir * this.stats.speed * dt;
-      this.y += dy * dir * this.stats.speed * dt;
-      this.facing = Math.atan2(dy * dir, dx * dir);
-    } else {
-      // small sideways strafe so it doesn't just stand still at range
-      this.x += -dy * this.strafeDir * this.stats.speed * 0.3 * dt;
-      this.y += dx * this.strafeDir * this.stats.speed * 0.3 * dt;
-      this.facing = Math.atan2(dy, dx); // keeps facing the player while strafing
-    }
-    this.isMoving = true;
-
-    if (d <= this.stats.attackRange && this.attackCooldownTimer <= 0) {
-      this.attackCooldownTimer = this.stats.attackCooldown;
-      const angle = Math.atan2(player.y - this.y, player.x - this.x);
-      this.facing = angle;
-      game.spawnEnemyProjectile(this.x, this.y, angle, this.type.projectileSpeed, this.stats.damage);
-    }
-  }
-
-  moveTowardBehavior(dt, player, d) {
-    if (this.type.behavior === "erratic") {
-      this.erraticTimer -= dt;
-      if (this.erraticTimer <= 0) {
-        this.erraticTimer = rand(0.25, 0.6);
-        const dx = player.x - this.x, dy = player.y - this.y;
-        const len = Math.hypot(dx, dy) || 1;
-        if (d > this.stats.detectRange * 1.3) {
-          // player far away: aimless wandering, not actively hunting
-          const a = rand(0, Math.PI * 2);
-          this.moveDir = { x: Math.cos(a), y: Math.sin(a) };
-          this.moveSpeedMult = 0.4;
-        } else {
-          const roll = Math.random();
-          if (roll < 0.45) {
-            // lunge straight at the player
-            this.moveDir = { x: dx / len, y: dy / len };
-            this.moveSpeedMult = 1.3;
-          } else if (roll < 0.8) {
-            // dart off at a wide angle — sideways or backwards, not a retreat
-            const baseAngle = Math.atan2(dy, dx);
-            const off = rand(0.9, 2.4) * (Math.random() < 0.5 ? -1 : 1);
-            const a = baseAngle + off;
-            this.moveDir = { x: Math.cos(a), y: Math.sin(a) };
-            this.moveSpeedMult = 1.1;
-          } else {
-            // dart straight away
-            this.moveDir = { x: -dx / len, y: -dy / len };
-            this.moveSpeedMult = 1.0;
-          }
-        }
-      }
-      this.x += this.moveDir.x * this.stats.speed * this.moveSpeedMult * dt;
-      this.y += this.moveDir.y * this.stats.speed * this.moveSpeedMult * dt;
-      this.isMoving = true;
-      this.facing = Math.atan2(this.moveDir.y, this.moveDir.x);
-      return;
-    }
-
-    if (d > this.stats.detectRange) { this.wanderRandomly(dt); return; }
-
-    let dx = player.x - this.x;
-    let dy = player.y - this.y;
-    const len = Math.hypot(dx, dy) || 1;
-    dx /= len; dy /= len;
-
-    const aggressive = this.type.behavior === "aggressive";
-    const jitterAmp = aggressive ? 0.12 : 0.4;
-
-    this.jitterTimer -= dt;
-    if (this.jitterTimer <= 0) {
-      this.jitterAngle = rand(-1, 1) * jitterAmp;
-      this.jitterTimer = aggressive ? rand(0.15, 0.3) : rand(0.2, 0.5);
-    }
-    const cos = Math.cos(this.jitterAngle), sin = Math.sin(this.jitterAngle);
-    const jdx = dx * cos - dy * sin;
-    const jdy = dx * sin + dy * cos;
-
-    this.x += jdx * this.stats.speed * dt;
-    this.y += jdy * this.stats.speed * dt;
-    this.isMoving = true;
-    this.facing = Math.atan2(jdy, jdx);
-  }
-
-  takeDamage(amount) {
-    this.hp -= amount;
-    this.hitFlash = 0.15;
-    if (this.hp <= 0 && !this.dead) {
-      this.dead = true;
-      return true;
-    }
-    return false;
-  }
-
-  draw(ctx) {
-    if (this.dead) return;
-    ctx.save();
-    ctx.translate(this.x, this.y);
-
-    // Top-down sprite per enemy type (rotated to facing) once loaded,
-    // falling back to the original vector shapes until then. Each enemy's
-    // sprite already bakes in its head, arms and held item as one image
-    // (enemies don't swap weapons like the player), so unlike Player.draw()
-    // there's no separate weapon overlay here.
-    const sprite = Sprites.get(this.type.id);
-    if (sprite) {
-      const bob = this.isMoving ? Math.sin(this.walkPhase) * 2 : 0;
-      const size = this.radius * 3.6;
-      ctx.save();
-      // Sprite convention is "faces up" EXCEPT the humanoid reference
-      // portraits, whose arms/held item hang toward the BOTTOM of their own
-      // frame (their actual forward/attack direction) — so those need an
-      // extra 180deg on top of the usual facing rotation, or they render
-      // walking/attacking backwards. The driveby car's front is already at
-      // the top of its frame, so it's excluded (see ENEMY_SPRITE_ANGLE_CORRECTION).
-      ctx.rotate(this.facing + Math.PI / 2 + (ENEMY_SPRITE_ANGLE_CORRECTION[this.type.id] || 0));
-      const { w, h } = drawSpriteFit(ctx, sprite, size, bob);
-      if (this.hitFlash > 0) {
-        ctx.globalCompositeOperation = "source-atop";
-        ctx.fillStyle = "rgba(255, 255, 255, 0.75)";
-        ctx.fillRect(-w / 2, -h / 2 + bob, w, h);
-        ctx.globalCompositeOperation = "source-over";
-      }
-      ctx.restore();
-    } else if (this.type.behavior === "driveby") {
-      this.drawCar(ctx);
-    } else {
-      ctx.fillStyle = this.hitFlash > 0 ? "#ffffff" : this.type.color;
-      ctx.beginPath();
-      ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = "#00000055";
-      ctx.lineWidth = 2;
-      ctx.stroke();
-    }
-    ctx.restore();
-
-    // hp bar
-    const w = this.radius * 2;
-    const hpFrac = clamp(this.hp / this.maxHp, 0, 1);
-    ctx.save();
-    ctx.translate(this.x - this.radius, this.y - this.radius - 10);
-    ctx.fillStyle = "#2a1414";
-    ctx.fillRect(0, 0, w, 4);
-    ctx.fillStyle = hpFrac > 0.4 ? "#d9455f" : "#ff8a3d";
-    ctx.fillRect(0, 0, w * hpFrac, 4);
-    ctx.restore();
-
-    if (this.ccTimer > 0) {
-      ctx.save();
-      ctx.fillStyle = this.ccType === "stun" ? "#ffe27a" : "#c7d3da";
-      ctx.font = "bold 12px system-ui, sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText(this.ccType === "stun" ? "☆" : "?", this.x, this.y - this.radius - 14);
-      ctx.restore();
-    }
-  }
-
-  // Simple vector car (matches the rest of the game's shape-only art): a body
-  // rectangle oriented along its travel direction, with two riders inside.
-  drawCar(ctx) {
-    const w = this.radius * 2.6, h = this.radius * 1.4;
-    if (this.drivebyDir < 0) ctx.rotate(Math.PI);
-    ctx.fillStyle = this.hitFlash > 0 ? "#ffffff" : this.type.color;
-    ctx.fillRect(-w / 2, -h / 2, w, h);
-    ctx.strokeStyle = "#00000066";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(-w / 2, -h / 2, w, h);
-    ctx.fillStyle = "#c7cad1";
-    ctx.beginPath(); ctx.arc(-w * 0.18, 0, this.radius * 0.26, 0, Math.PI * 2); ctx.fill();
-    ctx.beginPath(); ctx.arc(w * 0.18, 0, this.radius * 0.26, 0, Math.PI * 2); ctx.fill();
-  }
 }
 
 /* =========================================================
@@ -1754,19 +336,8 @@ class InputHandler {
   get moveVec() { return this.gpMoveVec || this.touchMoveVec || null; }
 }
 
-// Input-shaped adapter fed by messages from the remote peer, so
-// Player.update(dt, input) can drive the second player exactly like it
-// drives the local one — see Game.applyRemoteState.
-class RemoteInputState {
-  constructor() {
-    this.moveState = { up: false, down: false, left: false, right: false };
-    this.moveVec = null; // { x, y } continuous direction, or null (keyboard-only guest)
-    this.aim = null; // { x, y } unit vector, or null when centered
-  }
-  isDown(dir) { return !!this.moveState[dir]; }
-  get gpAim() { return this.aim; }
-  get touchAim() { return null; }
-}
+// RemoteInputState (input-shaped adapter fed by messages from the remote
+// peer) moved to simulation.js — see Simulation.applyRemoteState.
 
 /* =========================================================
    MULTIPLAYER (WebSocket relay)
@@ -1808,7 +379,6 @@ class NetworkManager {
       ws.onopen = () => resolve();
       ws.onerror = () => reject(new Error("ws-connect-failed"));
       ws.onclose = () => {
-        const wasGuest = this.role === "guest";
         const wasMultiplayer = this.isMultiplayer;
         this.role = null;
         this.roomCode = null;
@@ -1820,7 +390,7 @@ class NetworkManager {
         // rejecting into the button's own catch — calling notify() here too
         // would race it and immediately blank out that error message.
         if (wasMultiplayer) {
-          this.game.onNetworkClosed(wasGuest);
+          this.game.onNetworkClosed();
           this.notify();
         }
       };
@@ -1859,22 +429,15 @@ class NetworkManager {
         this.role = "guest";
         this.roomCode = msg.code;
         this.myId = msg.id;
-        this.hostId = msg.hostId; // lets us tell "the host left" apart from "some other guest left"
+        this.hostId = msg.hostId;
         this.notify();
-        // Tell the host what kind of input device we are, so it can decide
-        // whether to run auto-melee for our character (see Player.autoMeleeAttack).
-        this.send({ type: "hello", isTouchDevice: this.game.isTouchDevice });
         break;
       case "join-error":
         this.game.onRoomJoinError(msg.reason);
         break;
-      case "hello":
-        this.game.onRemoteHello(msg);
-        break;
       case "peer-joined":
-        // Order matters: onPeerJoined() actually adds the entry to
-        // this.game.remotePlayers, which the status UI reads the size of —
-        // notifying first would show a stale, one-behind player count.
+        // Order matters: onPeerJoined() updates the roster the status UI
+        // reads the size of — notifying first would show a stale count.
         this.game.onPeerJoined(msg.id);
         this.notify();
         break;
@@ -1882,12 +445,10 @@ class NetworkManager {
         this.game.onPeerLeft(msg.id);
         this.notify();
         break;
-      case "state":
-        this.game.applyRemoteState(msg);
-        break;
-      case "action":
-        this.game.applyRemoteAction(msg);
-        break;
+      // "state"/"action" are only ever SENT by a client (to the server,
+      // which is the sole simulation authority — see server.js) — a client
+      // never receives them. "snapshot" is the one thing every connected
+      // client (room creator included) receives and renders from.
       case "snapshot":
         this.game.applySnapshot(msg.state);
         break;
@@ -1911,16 +472,18 @@ class Game {
     this.canvas = document.getElementById("gameCanvas");
     this.ctx = this.canvas.getContext("2d");
 
+    // Everything that used to live directly on Game (player, enemies,
+    // projectiles, zone/wave state, ...) now lives on this.sim — see
+    // simulation.js. The getters below are thin proxies so all the
+    // rendering/DOM/shop code further down keeps reading/writing
+    // this.player / this.enemies / etc exactly as before.
+    this.sim = new Simulation();
+
     this.network = new NetworkManager(this);
-    // Host-side only: one entry per connected peer (up to 3, for up to 4
-    // players total), keyed by that peer's server-assigned id — see
-    // onPeerJoined/onPeerLeft and applyRemoteState/applyRemoteAction.
-    this.remotePlayers = new Map(); // id -> { player: Player, input: RemoteInputState, isTouchDevice: bool }
-    this._pendingTouchFlags = new Map(); // id -> bool, for a "hello" that arrives just before its "peer-joined"
-    this._snapshotTimer = 0;
+    this.connectedPeerIds = new Set(); // just for the "N/4 connected" status text, see onPeerJoined/onPeerLeft
     this._stateSendTimer = 0;
-    // Guest-only: raw snapshots (see applySnapshot) used to interpolate
-    // positions smoothly in drawFromSnapshot() instead of teleporting.
+    // Any multiplayer client: raw snapshots (see applySnapshot) used to
+    // interpolate positions smoothly in drawFromSnapshot() instead of teleporting.
     this._snapPrev = null;
     this._snapCurr = null;
     this._snapReceivedAt = 0;
@@ -1928,53 +491,47 @@ class Game {
 
     this.input = new InputHandler();
     // In multiplayer these callbacks fork on role: the host (or a solo
-    // player) executes the action directly exactly as before; a guest has
-    // no local simulation to act on, so it ships the action to the host
-    // over the network instead (see NetworkManager / applyRemoteAction).
+    // player) executes the action directly against its own local
+    // Simulation exactly as solo play always has; ANY multiplayer client —
+    // the room creator included, there is no more "host browser" running
+    // the game for everyone — has no local simulation to act on at all, so
+    // it always ships the action to the server instead (see NetworkManager
+    // / server.js). Every action is also gated on this.player.shopOpen:
+    // opening your own shop freezes only your own movement/actions —
+    // everyone else keeps playing in real time.
     this.input.onAttack = () => {
-      if (this.network.isGuest) { this.network.send({ type: "action", action: "attack" }); return; }
-      if (this.state === "playing") this.player.tryAttack(this);
+      if (this.network.isMultiplayer) { if (this.state === "playing" && !this.player.shopOpen) this.network.send({ type: "action", action: "attack" }); return; }
+      if (this.state === "playing" && !this.player.shopOpen) this.player.tryAttack(this.sim);
     };
     this.input.onRangedAttack = () => {
-      if (this.network.isGuest) { this.network.send({ type: "action", action: "rangedAttack" }); return; }
-      if (this.state === "playing") this.player.tryRangedAttack(this);
+      if (this.network.isMultiplayer) { if (this.state === "playing" && !this.player.shopOpen) this.network.send({ type: "action", action: "rangedAttack" }); return; }
+      if (this.state === "playing" && !this.player.shopOpen) this.player.tryRangedAttack(this.sim);
     };
     this.input.onDash = () => {
-      if (this.network.isGuest) { this.network.send({ type: "action", action: "dash" }); return; }
-      if (this.state === "playing") this.player.tryDash();
+      if (this.network.isMultiplayer) { if (this.state === "playing" && !this.player.shopOpen) this.network.send({ type: "action", action: "dash" }); return; }
+      if (this.state === "playing" && !this.player.shopOpen) this.player.tryDash();
     };
-    // Pause/shop stays host-only in this version — the guest is a thin
-    // client and doesn't manage the shared shop UI, see README.
-    this.input.onToggleMenu = () => { if (!this.network.isGuest) this.toggleUpgradeMenu(); };
+    // Solo play opens the local shop (toggleUpgradeMenu, operates on
+    // this.sim directly); any multiplayer client opens its own networked
+    // panel instead (toggleGuestShop — the name predates this generalizing
+    // to every role, but the mechanism was always role-agnostic: it mirrors
+    // this.player.run from the latest snapshot and ships purchases to the
+    // server, exactly the same whether you created the room or joined it).
+    this.input.onToggleMenu = () => { if (this.network.isMultiplayer) this.toggleGuestShop(); else this.toggleUpgradeMenu(); };
     this.input.onThrowBomb = () => {
-      if (this.network.isGuest) { this.network.send({ type: "action", action: "throwBomb" }); return; }
-      if (this.state === "playing") this.throwBomb(this.player);
+      if (this.network.isMultiplayer) { if (this.state === "playing" && !this.player.shopOpen) this.network.send({ type: "action", action: "throwBomb" }); return; }
+      if (this.state === "playing" && !this.player.shopOpen) this.sim.throwBomb(this.player);
     };
     this.input.onSelectBomb = (value, absolute) => {
-      if (this.network.isGuest) { this.network.send({ type: "action", action: "selectBomb", value, absolute }); return; }
-      if (this.state === "playing") this.selectBomb(value, absolute, this.player);
+      if (this.network.isMultiplayer) { if (this.state === "playing" && !this.player.shopOpen) this.network.send({ type: "action", action: "selectBomb", value, absolute }); return; }
+      if (this.state === "playing" && !this.player.shopOpen) this.sim.selectBomb(value, absolute, this.player);
     };
 
-    this.run = createRunState();
-    this.player = new Player(CONFIG.width / 2, CONFIG.height / 2);
-    this.player.refreshLoadout(this.run);
-    this.player.resetForRun();
+    this._guestShopMode = null; // guest-only: 'pause' | 'zoneComplete', see openGuestShop
 
-    this.enemies = [];
-    this.projectiles = [];
-    this.pickups = [];
-    this.bombs = [];
-    this.floatingTexts = [];
-
-    this.zone = 1;
-    this.moneyThisRun = 0;
-    this.enemiesToSpawn = 0;
-    this.spawnTimer = 0;
-    this.waveTotalEnemies = 0;
-    this.waveEnemiesDefeated = 0;
-
-    this.state = "menu"; // menu | playing | paused | zoneComplete | gameover
+    this.state = "menu"; // menu | playing | gameover
     this.lastTime = performance.now();
+    this._tickAccumulator = 0; // see loop()'s fixed-timestep accumulator
     this.activeShopSection = null; // null | "house" | "melee" | "ranged" | "bombs" — see openUpgradeMenu()/bindShopTabs()
 
     this.bindUI();
@@ -1989,21 +546,55 @@ class Game {
     requestAnimationFrame(this.loop);
   }
 
+  // Thin proxies onto this.sim's simulation state (see simulation.js) — the
+  // object references themselves are never reassigned from here (only
+  // mutated, or replaced wholesale inside Simulation's own methods), so a
+  // getter is enough for most; zone/parkPaths/zoneClearPending are also
+  // written directly by the guest snapshot-mirroring path below (see
+  // applySnapshot/applyGuestShopSync), so those three get setters too.
+  get player() { return this.sim.player; }
+  get remotePlayers() { return this.sim.remotePlayers; }
+  get enemies() { return this.sim.enemies; }
+  get projectiles() { return this.sim.projectiles; }
+  get pickups() { return this.sim.pickups; }
+  get bombs() { return this.sim.bombs; }
+  get floatingTexts() { return this.sim.floatingTexts; }
+  get parkObjects() { return this.sim.parkObjects; }
+  get moneyThisRun() { return this.sim.moneyThisRun; }
+  get waveTotalEnemies() { return this.sim.waveTotalEnemies; }
+  get waveEnemiesDefeated() { return this.sim.waveEnemiesDefeated; }
+  get zone() { return this.sim.zone; }
+  set zone(v) { this.sim.zone = v; }
+  get parkPaths() { return this.sim.parkPaths; }
+  set parkPaths(v) { this.sim.parkPaths = v; }
+  get zoneClearPending() { return this.sim.zoneClearPending; }
+  set zoneClearPending(v) { this.sim.zoneClearPending = v; }
+
   bindUI() {
+    // In multiplayer, starting/restarting a run is the server's call (it's
+    // the sole simulation authority now, see server.js) — a client just
+    // asks for it. Solo play stays exactly as before: fully local, no
+    // network involved at all. Only the room creator's tab even shows
+    // these buttons enabled while connected (see enterGuestWaiting), but
+    // the server itself also only honors "startRun" from that same socket.
     document.getElementById("start-btn").addEventListener("click", () => {
       SoundManager.ensure();
+      if (this.network.isMultiplayer) { this.network.send({ type: "startRun" }); return; }
       clearRunState(); // starting fresh deliberately abandons any saved run
       this.startRun();
     });
     document.getElementById("continue-btn").addEventListener("click", () => {
       SoundManager.ensure();
+      if (this.network.isMultiplayer) { this.network.send({ type: "startRun" }); return; }
       this.resumeRun();
     });
     document.getElementById("restart-btn").addEventListener("click", () => {
+      if (this.network.isMultiplayer) { this.network.send({ type: "startRun" }); return; }
       this.startRun();
     });
     document.getElementById("upgrade-continue-btn").addEventListener("click", () => {
-      this.closeUpgradeMenu();
+      if (this.network.isMultiplayer) this.closeGuestShop();
+      else this.closeUpgradeMenu();
     });
     document.getElementById("mute-btn").addEventListener("click", () => {
       SoundManager.muted = !SoundManager.muted;
@@ -2074,39 +665,14 @@ class Game {
 
   // Backfills any run fields introduced after a save was written, so an
   // older save doesn't crash against newer content (new upgrade ids, etc.).
-  normalizeRun(run) {
-    UPGRADES.forEach(u => { if (run.upgrades[u.id] == null) run.upgrades[u.id] = 0; });
-    if (run.meleeTier == null) run.meleeTier = 0;
-    if (run.rangedTier == null) run.rangedTier = -1;
-    if (!run.meleeWeaponUpgrades) run.meleeWeaponUpgrades = [];
-    if (!run.rangedWeaponUpgrades) run.rangedWeaponUpgrades = [];
-    if (!run.bombs) run.bombs = {};
-    if (run.playerLevel == null) run.playerLevel = 0;
-    if (run.money == null) run.money = 0;
-    return run;
-  }
-
   // Restores the shop progress (money, upgrades, weapons, zone reached) from
   // the last save; the wave in progress when it was saved is not replayed,
   // the zone simply restarts fresh — see the SAVE / RESUME header comment.
+  // normalizeRun() lives in simulation.js — pure, shared with Simulation.
   resumeRun() {
     const saved = loadRunState();
     if (!saved) { this.startRun(); return; }
-    this.run = this.normalizeRun(saved.run);
-    this.zone = saved.zone || 1;
-    this.moneyThisRun = 0;
-    this.player.refreshLoadout(this.run);
-    this.player.resetForRun();
-    if (saved.playerHp != null) this.player.hp = clamp(saved.playerHp, 1, this.player.maxHp);
-    this.player.x = CONFIG.width / 2;
-    this.player.y = CONFIG.height / 2;
-    this.repositionRemotePlayers();
-    this.enemies = [];
-    this.projectiles = [];
-    this.pickups = [];
-    this.bombs = [];
-    this.player.selectedThrowable = 0;
-    this.floatingTexts = [];
+    this.sim.resumeRun(saved.run, saved.zone, saved.playerHp);
     this.setState("playing");
     this.startZone();
   }
@@ -2114,7 +680,7 @@ class Game {
   // See the SAVE / RESUME header comment: called every time the game
   // actually pauses (openUpgradeMenu), not continuously.
   saveGame() {
-    saveRunState({ zone: this.zone, run: this.run, playerHp: this.player.hp });
+    saveRunState({ zone: this.zone, run: this.player.run, playerHp: this.player.hp });
   }
 
   detectTouchDevice() {
@@ -2176,17 +742,21 @@ class Game {
     };
     holdButton("touch-dash", "touchDash");
 
+    // Routed through the same input.onX callbacks as keyboard/gamepad (see
+    // the constructor) rather than calling this.throwBomb()/etc. directly,
+    // so a guest's touch controls correctly ship a network action instead
+    // of touching a local simulation that doesn't exist on that tab.
     document.getElementById("touch-bomb-throw").addEventListener("touchstart", e => {
       e.preventDefault();
-      if (this.state === "playing") this.throwBomb();
+      this.input.onThrowBomb();
     }, { passive: false });
     document.getElementById("touch-bomb-select").addEventListener("touchstart", e => {
       e.preventDefault();
-      if (this.state === "playing") this.selectBomb(1, false);
+      this.input.onSelectBomb(1, false);
     }, { passive: false });
     document.getElementById("touch-pause").addEventListener("touchstart", e => {
       e.preventDefault();
-      this.toggleUpgradeMenu();
+      this.input.onToggleMenu();
     }, { passive: false });
 
     this.bindJoystick();
@@ -2337,7 +907,7 @@ class Game {
       idleRow.classList.add("hidden");
       leaveBtn.classList.remove("hidden");
       if (net.isHost) {
-        const count = this.remotePlayers.size + 1; // +1 for the host itself
+        const count = this.connectedPeerIds.size + 1; // +1 for ourselves
         setStatus(
           count > 1
             ? `Stanza ${net.roomCode} — ${count}/4 giocatori connessi, condividi il codice per farne entrare altri`
@@ -2345,7 +915,7 @@ class Game {
           count > 1 ? "mp-ok" : null
         );
       } else if (net.isGuest) {
-        setStatus(`Connesso alla stanza ${net.roomCode}. In attesa dell'host...`, "mp-ok");
+        setStatus(`Connesso alla stanza ${net.roomCode}. In attesa che l'host avvii la partita...`, "mp-ok");
         this.enterGuestWaiting();
       }
     };
@@ -2365,14 +935,15 @@ class Game {
     });
 
     leaveBtn.addEventListener("click", () => {
-      const wasGuest = this.network.isGuest;
       this.network.disconnect();
-      this.remotePlayers.clear();
+      this.connectedPeerIds.clear();
       this._snapPrev = null;
-    this._snapCurr = null;
+      this._snapCurr = null;
       document.getElementById("mp-wait-overlay").classList.add("hidden");
       this.network.onStatusChange();
-      if (wasGuest) this.setState("menu");
+      // Neither role has a local fallback simulation anymore (see
+      // onNetworkClosed) — leaving the room always means back to the menu.
+      this.setState("menu");
     });
   }
 
@@ -2393,205 +964,54 @@ class Game {
     statusEl.textContent = reason === "full" ? "Quella stanza è già piena." : "Codice stanza non valido.";
   }
 
-  // A peer just paired into our room. On the guest side this message just
-  // means "some *other* guest joined too" — irrelevant to us, we only ever
-  // talk to the host — so this stays a no-op there.
-  //
-  // Host-side, hot-add a Player for them, spread out around the host's
-  // spawn point; this can happen before a run has even started (menu) or
-  // mid-run either way. Nothing else needs to change since enemy
-  // targeting/collision/game-over already iterate over activePlayers.
+  // Purely a lightweight roster for the "N/4 giocatori connessi" status
+  // text (see bindMultiplayerUI) — no real Player objects live client-side
+  // for multiplayer anymore; the server's own Simulation (see server.js) is
+  // the only place those exist now, for every participant including
+  // whoever created the room.
   onPeerJoined(id) {
-    if (!this.network.isHost || this.remotePlayers.has(id)) return;
-    const off = this.spawnOffsetFor(this.remotePlayers.size + 1);
-    const player = new Player(CONFIG.width / 2 + off.x, CONFIG.height / 2 + off.y);
-    player.refreshLoadout(this.run);
-    player.resetForRun();
-    const isTouchDevice = this._pendingTouchFlags.get(id) || false;
-    this._pendingTouchFlags.delete(id);
-    this.remotePlayers.set(id, { player, input: new RemoteInputState(), isTouchDevice });
-  }
-
-  // The guest tells us (the host) whether it's a touch device right after
-  // joining, so we know whether to run auto-melee for its character too —
-  // see Player.autoMeleeAttack and the isTouchDevice-gated call in update().
-  // Stashed in _pendingTouchFlags if it beats the matching "peer-joined"
-  // there (the server sends peer-joined first, but message arrival order
-  // across two different sockets is never strictly guaranteed).
-  onRemoteHello(msg) {
-    const entry = this.remotePlayers.get(msg.from);
-    if (entry) entry.isTouchDevice = !!msg.isTouchDevice;
-    else this._pendingTouchFlags.set(msg.from, !!msg.isTouchDevice);
+    this.connectedPeerIds.add(id);
   }
 
   onPeerLeft(id) {
-    if (this.network.isHost) {
-      // That one player dropped out — everyone else's game continues uninterrupted.
-      this.remotePlayers.delete(id);
-      this._pendingTouchFlags.delete(id);
-      return;
-    }
-    // We're a guest. With up to 4 players in a room, a "peer-left" can be
-    // about any *other* guest leaving — none of our business, since we only
-    // ever talk to the host. Only react if it's specifically the host that
-    // disconnected, since that's the one peer we actually depend on: there's
-    // no local simulation to fall back on, so head back to the menu.
-    if (id !== this.network.hostId) return;
-    this.network.disconnect();
-    this.remotePlayers.clear();
+    this.connectedPeerIds.delete(id);
+    // No special handling needed even if it was the room's original
+    // creator — the server keeps the simulation going for whoever's left
+    // (see server.js's promoteRemoteToPrimary), and every client only ever
+    // depended on its OWN connection to the server, never on a peer.
+  }
+
+  // Our own socket closed (not a "peer-left" relay message about someone
+  // else — our actual connection to the server dropped). Every multiplayer
+  // client is an equally thin client with no local fallback simulation
+  // (the room creator included), so this always means heading back to the
+  // menu, regardless of role.
+  onNetworkClosed() {
+    this.connectedPeerIds.clear();
     this._snapPrev = null;
     this._snapCurr = null;
     document.getElementById("mp-wait-overlay").classList.add("hidden");
     this.setState("menu");
   }
 
-  // Our own socket closed (not a "peer-left" relay message — our actual
-  // connection to the relay dropped). For a guest that means the whole
-  // session is gone since it never ran its own simulation; a host just
-  // loses its networking and can keep playing solo.
-  onNetworkClosed(wasGuest) {
-    this.remotePlayers.clear();
-    this._pendingTouchFlags.clear();
-    this._snapPrev = null;
-    this._snapCurr = null;
-    document.getElementById("mp-wait-overlay").classList.add("hidden");
-    if (wasGuest) this.setState("menu");
-  }
+  // spawnOffsetFor/repositionRemotePlayers/activePlayers/combinedPlayerLevel/
+  // nearestPlayerTo all moved to Simulation (simulation.js) — reach them via
+  // this.sim.X where still needed below.
 
-  // Spawn offset (relative to field center) for the Nth player to join a
-  // room, host included — a small cross formation so up to 4 players don't
-  // stack on top of each other. Index 0 (the host) is always dead center.
-  spawnOffsetFor(index) {
-    const offsets = [{ x: 0, y: 0 }, { x: 60, y: 0 }, { x: -60, y: 0 }, { x: 0, y: 60 }];
-    return offsets[index % offsets.length];
-  }
+  // applyRemoteState/applyRemoteAction/sendSnapshot all moved to the
+  // server (see server.js and Simulation.applyRemoteState/
+  // applyRemoteAction/toSnapshot in simulation.js) — no client ever runs
+  // the multiplayer simulation anymore, so there's nothing here to apply
+  // incoming input to or broadcast a snapshot of.
 
-  // Applies the current run's upgrades/weapons to every connected player —
-  // shared by every shop purchase handler below.
-  refreshAllLoadouts() {
-    this.player.refreshLoadout(this.run);
-    for (const entry of this.remotePlayers.values()) entry.player.refreshLoadout(this.run);
-  }
-
-  // Refreshes loadout and re-spawns every currently-connected remote player
-  // around the host's spawn point — shared by startRun()/resumeRun().
-  repositionRemotePlayers() {
-    let i = 1;
-    for (const entry of this.remotePlayers.values()) {
-      const off = this.spawnOffsetFor(i++);
-      entry.player.refreshLoadout(this.run);
-      entry.player.resetForRun();
-      entry.player.x = CONFIG.width / 2 + off.x;
-      entry.player.y = CONFIG.height / 2 + off.y;
-    }
-  }
-
-  // Every living player (host's own + every connected guest's) — used by
-  // enemy targeting, projectile/pickup collision and the game-over check so
-  // none of that logic needs to know whether we're actually in multiplayer,
-  // let alone how many players are in the room.
-  get activePlayers() {
-    const list = [this.player];
-    for (const entry of this.remotePlayers.values()) list.push(entry.player);
-    return list.filter(p => p.hp > 0);
-  }
-
-  nearestPlayerTo(x, y) {
-    const candidates = this.activePlayers;
-    if (candidates.length === 0) return this.player;
-    let best = candidates[0];
-    let bestD = dist(x, y, best.x, best.y);
-    for (let i = 1; i < candidates.length; i++) {
-      const d = dist(x, y, candidates[i].x, candidates[i].y);
-      if (d < bestD) { bestD = d; best = candidates[i]; }
-    }
-    return best;
-  }
-
-  // Guest -> host: continuous movement/aim state, sent at a throttled rate
-  // (see update()). Applied straight into the sender's RemoteInputState,
-  // identified by msg.from — see the entry.player.update() call in update().
-  applyRemoteState(msg) {
-    if (!this.network.isHost) return;
-    const entry = this.remotePlayers.get(msg.from);
-    if (!entry) return;
-    entry.input.moveState = msg.move || { up: false, down: false, left: false, right: false };
-    entry.input.moveVec = msg.moveVec || null;
-    entry.input.aim = msg.aim || null;
-  }
-
-  // Guest -> host: discrete one-shot actions (mirrors the local keyboard's
-  // edge-triggered onAttack/onDash/etc. — one message per press, cooldowns
-  // inside tryAttack/tryDash/etc. already make repeats harmless).
-  applyRemoteAction(msg) {
-    if (!this.network.isHost || this.state !== "playing") return;
-    const entry = this.remotePlayers.get(msg.from);
-    if (!entry) return;
-    const rp = entry.player;
-    switch (msg.action) {
-      case "attack": rp.tryAttack(this); break;
-      case "rangedAttack": rp.tryRangedAttack(this); break;
-      case "dash": rp.tryDash(); break;
-      case "throwBomb": this.throwBomb(rp); break;
-      case "selectBomb": this.selectBomb(msg.value, msg.absolute, rp); break;
-    }
-  }
-
-  // Host -> guest: a compact snapshot of everything the guest needs to
-  // render (see applySnapshot). Throttled — see the call site in update().
-  sendSnapshot() {
-    const serializePlayer = (p, id, isHost) => ({
-      id, isHost,
-      x: p.x, y: p.y, facing: p.facing, aimAngle: p.aimAngle,
-      radius: p.radius, hp: p.hp, maxHp: p.maxHp,
-      meleeId: p.melee && p.melee.id, meleeName: p.melee && p.melee.name,
-      rangedId: p._rangedWeaponId, rangedName: p.ranged && p.ranged.name,
-      ammo: p.ammo, maxAmmo: p.ranged && p.ranged.maxAmmo,
-      hitFlash: p.hitFlash, isMoving: p.isMoving, walkPhase: p.walkPhase,
-      attackActiveTimer: p.attackActiveTimer, isInvulnerable: p.isInvulnerable,
-      meleeRange: p.melee && p.melee.range,
-    });
-    const players = [serializePlayer(this.player, this.network.myId, true)];
-    for (const [id, entry] of this.remotePlayers) players.push(serializePlayer(entry.player, id, false));
-
-    const state = {
-      gameState: this.state,
-      zone: this.zone,
-      zoneName: this.zoneName(this.zone),
-      waveTotal: this.waveTotalEnemies,
-      waveDefeated: this.waveEnemiesDefeated,
-      money: this.run.money,
-      finalZone: this.zone,
-      finalMoney: Math.max(0, this.moneyThisRun),
-      players,
-      enemies: this.enemies.filter(e => !e.dead).map(e => ({
-        id: e.id, x: e.x, y: e.y, facing: e.facing, hp: e.hp, maxHp: e.maxHp,
-        radius: e.radius, typeId: e.type.id, hitFlash: e.hitFlash,
-        isMoving: e.isMoving, walkPhase: e.walkPhase,
-        ccTimer: e.ccTimer, ccType: e.ccType, drivebyDir: e.drivebyDir,
-      })),
-      projectiles: this.projectiles.map(p => ({
-        id: p.id, x: p.x, y: p.y, radius: p.radius, owner: p.owner, splashRadius: p.splashRadius,
-      })),
-      pickups: this.pickups.map(p => ({ id: p.id, x: p.x, y: p.y, kind: p.kind, life: p.life })),
-      bombs: this.bombs.map(b => ({
-        id: b.id, x: b.x, y: b.y, typeId: b.type.id, exploded: b.exploded,
-        effectTimer: b.effectTimer, fuseDuration: b.type.fuse,
-      })),
-      floatingTexts: this.floatingTexts.map(ft => ({
-        x: ft.x, y: ft.y, text: ft.text, color: ft.color, life: ft.life, maxLife: ft.maxLife,
-      })),
-    };
-    this.network.send({ type: "snapshot", state });
-  }
-
-  // Guest-side: stashes the raw snapshot (prev + newly arrived) with a
+  // Every multiplayer client (room creator included): stashes the raw
+  // snapshot (prev + newly arrived) with a
   // wall-clock timestamp, so drawFromSnapshot() can interpolate positions
   // between the two rather than teleporting to the new one every ~10ms
   // (see the id-matched lerp in interpolatedList). HUD/UI state itself
   // isn't interpolated — it just tracks the latest snapshot directly.
   applySnapshot(state) {
-    if (!this.network.isGuest) return;
+    if (!this.network.isMultiplayer) return;
 
     const now = performance.now();
     if (this._snapCurr) {
@@ -2608,6 +1028,7 @@ class Game {
     this._snapReceivedAt = now;
 
     this.zone = state.zone; // lets drawBackground()'s darkness-by-zone logic work unmodified
+    this.parkPaths = state.parkPaths || []; // static, so drawBackground()'s path strips just work unmodified too
     this.applyGuestUIState();
   }
 
@@ -2623,12 +1044,14 @@ class Game {
       this.setState("gameover");
       document.getElementById("final-zone").textContent = s.finalZone;
       document.getElementById("final-money").textContent = s.finalMoney;
-      document.getElementById("gameover-guest-note").classList.remove("hidden");
-      document.getElementById("restart-btn").classList.add("hidden");
+      // Only the room creator's tab can start a new run (mirrors
+      // server.js's startRun guard) — everyone else just waits for it.
+      document.getElementById("gameover-guest-note").classList.toggle("hidden", this.network.isHost);
+      document.getElementById("restart-btn").classList.toggle("hidden", !this.network.isHost);
     } else {
       this.setState("playing");
-      document.getElementById("mp-wait-overlay").classList.toggle("hidden", s.gameState !== "paused" && s.gameState !== "zoneComplete");
       this.updateHUDFromSnapshot(s);
+      this.applyGuestShopSync(s);
     }
   }
 
@@ -2645,10 +1068,99 @@ class Game {
       weaponLabel.textContent = me.rangedName
         ? `${me.meleeName} · ${me.rangedName} (${me.ammo}/${me.maxAmmo})`
         : me.meleeName;
+      if (me.run) document.getElementById("money-label").textContent = `€ ${me.run.money}`;
     }
     document.getElementById("zone-label").textContent = `Zona ${s.zone} — ${s.zoneName}`;
     document.getElementById("wave-label").textContent = `Nemici rimasti: ${Math.max(0, s.waveTotal - s.waveDefeated)}`;
-    document.getElementById("money-label").textContent = `€ ${s.money}`;
+  }
+
+  // Any multiplayer client: keeps this.player mirroring MY OWN entry from
+  // the latest snapshot (run/ammo/ranged + derived stats via
+  // refreshLoadout) so every render*/buy* method below works unchanged
+  // whether the shop is open on the room creator's tab or a joiner's — see
+  // openGuestShop/closeGuestShop and the isMultiplayer fork at the top of
+  // each buyX() handler.
+  applyGuestShopSync(s) {
+    const me = s.players.find(p => p.id === this.network.myId);
+    if (me && me.run) {
+      this.player.run = me.run;
+      this.player.ammo = me.ammo;
+      this.player.ranged = me.rangedName ? { name: me.rangedName, maxAmmo: me.maxAmmo } : null;
+      // Seed refreshLoadout's tier-change tracking from the host's real
+      // values first — otherwise the very first sync on a fresh mirror
+      // (both start null) reads as "just switched weapons" and stomps the
+      // ammo count above back to full.
+      this.player._rangedWeaponId = me.rangedId;
+      this.player._rangedMaxAmmo = me.maxAmmo;
+      this.player.refreshLoadout(this.player.run);
+      this.player.readyForNextZone = !!me.ready;
+    }
+    this.zoneClearPending = !!s.zoneClearPending;
+
+    const shopScreenHidden = document.getElementById("upgrade-screen").classList.contains("hidden");
+    if (this.zoneClearPending && shopScreenHidden && !(me && me.ready)) {
+      this.openGuestShop("zoneComplete");
+    } else if (!shopScreenHidden && this._guestShopMode) {
+      this.renderShopContent(); // keep the open panel's numbers fresh as new snapshots arrive
+    }
+    this.updateWaitOverlay(s);
+  }
+
+  // Shown on both host and guest tabs whenever the wave is cleared and at
+  // least one active (alive) player hasn't confirmed ready yet, so nobody's
+  // left wondering why the field is still empty while someone else shops.
+  updateWaitOverlay(s) {
+    const overlay = document.getElementById("mp-wait-overlay");
+    const shopOpen = !document.getElementById("upgrade-screen").classList.contains("hidden");
+    if (!this.zoneClearPending || shopOpen) { overlay.classList.add("hidden"); return; }
+    const alive = s ? s.players.filter(p => p.hp > 0) : this.sim.activePlayers;
+    const readyCount = s ? alive.filter(p => p.ready).length : alive.filter(p => p.readyForNextZone).length;
+    overlay.querySelector(".desc").textContent =
+      `In attesa che tutti i giocatori siano pronti per la prossima zona… (${readyCount}/${alive.length})`;
+    overlay.classList.remove("hidden");
+  }
+
+  // Guest-only mirror of openUpgradeMenu/closeUpgradeMenu/toggleUpgradeMenu:
+  // there's no host-authoritative pause to flip, just this tab's own
+  // overlay — this.player.run/stats are kept fresh by applyGuestShopSync.
+  openGuestShop(mode) {
+    this._guestShopMode = mode;
+    this.player.shopOpen = true;
+    const title = document.getElementById("upgrade-title");
+    const subtitle = document.getElementById("upgrade-subtitle");
+    const btn = document.getElementById("upgrade-continue-btn");
+    if (mode === "zoneComplete") {
+      title.textContent = `Zona ${this.zone} completata!`;
+      subtitle.textContent = "Spendi i tuoi soldi, poi conferma di essere pronto per la prossima zona.";
+      btn.textContent = "Sono pronto";
+    } else {
+      title.textContent = "Pausa — Potenzia casa";
+      subtitle.textContent = "";
+      btn.textContent = "Riprendi";
+    }
+    this.renderShopStats();
+    this.activeShopSection = null;
+    this.applyShopSectionVisibility();
+    this.renderShopContent();
+    document.getElementById("upgrade-screen").classList.remove("hidden");
+    document.getElementById("mp-wait-overlay").classList.add("hidden");
+  }
+
+  closeGuestShop() {
+    document.getElementById("upgrade-screen").classList.add("hidden");
+    this.player.shopOpen = false;
+    if (this._guestShopMode === "zoneComplete") {
+      this.network.send({ type: "action", action: "readyForNextZone" });
+    }
+    this._guestShopMode = null;
+    this.updateWaitOverlay(this._snapCurr);
+  }
+
+  toggleGuestShop() {
+    if (this.state !== "playing") return;
+    const hidden = document.getElementById("upgrade-screen").classList.contains("hidden");
+    if (hidden) this.openGuestShop(this._guestShopMode || "pause");
+    else this.closeGuestShop();
   }
 
   lerp(a, b, t) { return a + (b - a) * t; }
@@ -2723,324 +1235,37 @@ class Game {
     });
   }
 
-  zoneName(zone) {
-    const names = CONFIG.zoneNames;
-    if (zone <= names.length) return names[zone - 1];
-    return `${names[names.length - 1]} (Lv. ${zone - names.length + 1})`;
-  }
-
-  enemyStatsForZone(zone, type) {
-    const s = CONFIG.enemy;
-    const z = zone - 1;
-    const sc = CONFIG.zoneScaling;
-    // Player level grows as upgrades/weapons get bought — a slow extra HP/damage
-    // tax so a fully-kitted-out player doesn't make the run trivially easy.
-    const lvl = this.run.playerLevel || 0;
-    const levelHpMult = 1 + sc.hpPerPlayerLevel * lvl;
-    const levelDamageMult = 1 + sc.damagePerPlayerLevel * lvl;
-    return {
-      speed: s.baseSpeed * (1 + sc.speedPerZone * z) * type.speedMult,
-      maxHP: Math.round(s.baseMaxHP * (1 + sc.hpPerZone * z) * type.hpMult * levelHpMult),
-      damage: Math.round(s.baseDamage * (1 + sc.damagePerZone * z) * type.damageMult * levelDamageMult),
-      attackCooldown: Math.max(
-        sc.minCooldown,
-        s.attackCooldown * (1 - sc.cooldownFactorPerZone * z) * type.cooldownMult
-      ),
-      attackRange: type.attackRangeOverride || s.attackRange,
-      detectRange: type.detectRangeOverride || s.detectRange,
-      moneyRange: [
-        Math.round(s.baseMoneyDrop[0] * (1 + sc.moneyPerZone * z) * (type.moneyMult || 1)),
-        Math.round(s.baseMoneyDrop[1] * (1 + sc.moneyPerZone * z) * (type.moneyMult || 1)),
-      ],
-    };
-  }
-
+  // zoneName/enemyStatsForZone/startZone/generateParkLayout/
+  // damageParkObject/resolveObjectCollisions/spawnEnemy/spawnDriveby/
+  // spawnProjectile/spawnEnemyProjectile/selectBomb/grenadeDamageForZone/
+  // throwBomb/findNearestInCone/aimAssist/findAutoFireAngle/damageEnemy/
+  // onDrivebyExit/rollPickupDrop/collectPickup/onPlayerHit all moved to
+  // Simulation (simulation.js) — reach them via this.sim.X.
   startRun() {
-    this.run = createRunState();
-    this.player.refreshLoadout(this.run);
-    this.player.resetForRun();
-    this.player.x = CONFIG.width / 2;
-    this.player.y = CONFIG.height / 2;
-    this.repositionRemotePlayers();
-    this.zone = 1;
-    this.moneyThisRun = 0;
-    this.enemies = [];
-    this.projectiles = [];
-    this.pickups = [];
-    this.bombs = [];
-    this.player.selectedThrowable = 0;
-    this.floatingTexts = [];
+    this.sim.startRun();
     this.setState("playing");
-    this.startZone();
-  }
-
-  startZone() {
-    this.player.healOnNewZone();
-    for (const entry of this.remotePlayers.values()) entry.player.healOnNewZone();
-    const count = Math.min(
-      CONFIG.waves.baseEnemies + (this.zone - 1) * CONFIG.waves.perZone,
-      CONFIG.waves.maxEnemies
-    );
-    this.waveTotalEnemies = count;
-    this.waveEnemiesDefeated = 0;
-    this.enemiesToSpawn = count;
-    this.spawnTimer = 0;
-    SoundManager.wave();
-  }
-
-  spawnEnemy() {
-    const type = pickEnemyType(this.zone);
-    if (type.behavior === "driveby") { this.spawnDriveby(type); return; }
-
-    const edge = randInt(0, 3);
-    let x, y;
-    const m = 30;
-    if (edge === 0) { x = rand(m, CONFIG.width - m); y = 70; }
-    else if (edge === 1) { x = rand(m, CONFIG.width - m); y = CONFIG.height - m; }
-    else if (edge === 2) { x = m; y = rand(90, CONFIG.height - m); }
-    else { x = CONFIG.width - m; y = rand(90, CONFIG.height - m); }
-
-    const zoneStats = this.enemyStatsForZone(this.zone, type);
-    this.enemies.push(new Enemy(x, y, zoneStats, type));
-  }
-
-  // Enters from the left or right edge near the player's current lane and
-  // drives straight across at high speed, firing as it passes — it never
-  // chases or melees (see Enemy.updateDriveby). Killing it before it exits
-  // pays out a bonus (see moneyMult); otherwise it just leaves the field.
-  spawnDriveby(type) {
-    const fromLeft = Math.random() < 0.5;
-    const x = fromLeft ? -50 : CONFIG.width + 50;
-    const players = this.activePlayers;
-    const lanePlayer = players[randInt(0, players.length - 1)] || this.player;
-    const y = clamp(lanePlayer.y + rand(-80, 80), 90, CONFIG.height - 30);
-    const zoneStats = this.enemyStatsForZone(this.zone, type);
-    const enemy = new Enemy(x, y, zoneStats, type);
-    enemy.drivebyDir = fromLeft ? 1 : -1;
-    enemy.facing = fromLeft ? 0 : Math.PI;
-    this.enemies.push(enemy);
-  }
-
-  spawnProjectile(x, y, angle, speed, damage, splashRadius, shooter, weaponId, instaKill = false, homing = false) {
-    this.projectiles.push(new Projectile(x, y, angle, speed, damage, "player", splashRadius, shooter, weaponId, instaKill, homing));
-  }
-
-  spawnEnemyProjectile(x, y, angle, speed, damage) {
-    this.projectiles.push(new Projectile(x, y, angle, speed, damage, "enemy"));
-  }
-
-  // value/absolute: keyboard digit keys pass (index, true) to jump straight
-  // to a slot; the gamepad's L1 passes (1, false) to cycle forward by one.
-  // `actor` defaults to the local player but is passed explicitly as one of
-  // the entries in this.remotePlayers when applying a guest's action in
-  // multiplayer, since the selected slot is tracked per-player, not per-run.
-  selectBomb(value, absolute, actor = this.player) {
-    const n = THROWABLES.length;
-    actor.selectedThrowable = absolute ? value % n : (actor.selectedThrowable + value + n) % n;
-  }
-
-  // Grenade damage is computed here rather than stored as a flat table
-  // value: scaled the same way enemy HP itself scales (zone + player level),
-  // targeted to comfortably one-shot the toughest "base" archetype (Balordo,
-  // hpMult 1.25) while staying safely under the Bruto's 1.6x — so it stays
-  // balanced at zone 1 and at zone 100 alike, however far a run has gone.
-  grenadeDamageForZone() {
-    const sc = CONFIG.zoneScaling;
-    const z = this.zone - 1;
-    const lvl = this.run.playerLevel || 0;
-    const levelHpMult = 1 + sc.hpPerPlayerLevel * lvl;
-    const balordoHpMult = ENEMY_TYPES.find(t => t.id === "balordo").hpMult;
-    const baseHpAtZone = CONFIG.enemy.baseMaxHP * (1 + sc.hpPerZone * z) * balordoHpMult * levelHpMult;
-    return Math.round(baseHpAtZone * 1.15);
-  }
-
-  throwBomb(actor = this.player) {
-    const type = THROWABLES[actor.selectedThrowable];
-    if (!type) return;
-    const count = this.run.bombs[type.id] || 0;
-    if (count <= 0) { SoundManager.emptyClick(); return; }
-    this.run.bombs[type.id] = count - 1;
-
-    const angle = actor.aimAngle;
-
-    // Knife/shuriken fly like a bullet instead of landing at a fixed point
-    // — see class Projectile's instaKill/homing handling.
-    if (type.isProjectileThrow) {
-      const muzzle = actor.radius + 8;
-      this.spawnProjectile(
-        actor.x + Math.cos(angle) * muzzle,
-        actor.y + Math.sin(angle) * muzzle,
-        angle,
-        type.projectileSpeed,
-        type.damage || 0,
-        0,
-        actor,
-        type.id,
-        !!type.instaKill,
-        !!type.homing
-      );
-      SoundManager.throwBomb();
-      return;
-    }
-
-    let x, y, stickTarget = null;
-    if (type.sticky) {
-      stickTarget = this.findNearestInCone(actor.x, actor.y, angle, THROW_CONE, THROW_RANGE);
-    }
-    if (stickTarget) {
-      x = stickTarget.x;
-      y = stickTarget.y;
-    } else {
-      const margin = 20;
-      x = clamp(actor.x + Math.cos(angle) * THROW_RANGE, margin, CONFIG.width - margin);
-      y = clamp(actor.y + Math.sin(angle) * THROW_RANGE, margin, CONFIG.height - margin);
-    }
-    const damageOverride = type.id === "grenade" ? this.grenadeDamageForZone() : null;
-    this.bombs.push(new Bomb(type, x, y, stickTarget, actor, damageOverride));
-    SoundManager.throwBomb();
-  }
-
-  // Nearest living enemy within a cone around `angle`, or null if none.
-  findNearestInCone(x, y, angle, maxAngle, maxDist) {
-    let best = null;
-    let bestDiff = Infinity;
-    for (const enemy of this.enemies) {
-      if (enemy.dead) continue;
-      const dx = enemy.x - x, dy = enemy.y - y;
-      const d = Math.hypot(dx, dy);
-      if (d > maxDist) continue;
-      const enemyAngle = Math.atan2(dy, dx);
-      let diff = Math.abs(enemyAngle - angle);
-      if (diff > Math.PI) diff = Math.PI * 2 - diff;
-      if (diff <= maxAngle && diff < bestDiff) {
-        bestDiff = diff;
-        best = enemy;
-      }
-    }
-    return best;
-  }
-
-  // Manual fire: snaps onto a nearby enemy if there is one, otherwise still
-  // fires straight along the aim (a deliberate button press shouldn't be a no-op).
-  aimAssist(x, y, aim, coneBonus = 0) {
-    const enemy = this.findNearestInCone(x, y, aim, Math.PI / 5 + coneBonus, 480);
-    return enemy ? Math.atan2(enemy.y - y, enemy.x - x) : aim;
-  }
-
-  // Auto-fire: only shoots when something is actually sitting in the aim
-  // cone — silence otherwise, so the gun doesn't spray at nothing.
-  findAutoFireAngle(x, y, aim, coneBonus = 0) {
-    const enemy = this.findNearestInCone(x, y, aim, Math.PI / 6 + coneBonus, 480);
-    return enemy ? Math.atan2(enemy.y - y, enemy.x - x) : null;
-  }
-
-  // `source` is whichever Player instance dealt this particular hit (null
-  // for damage with no clear owner, e.g. leftover fire ticks after the
-  // thrower disconnected) and `weaponId` is the id of the weapon/throwable
-  // that dealt it — both feed the per-player run stats shown in the shop's
-  // stats screen (kills, money earned, weapon with the most kills).
-  damageEnemy(enemy, amount, source = null, weaponId = null) {
-    const killed = enemy.takeDamage(amount);
-    this.floatingTexts.push(new FloatingText(enemy.x, enemy.y - 20, `-${Math.round(amount)}`, "#ffffff"));
-    if (killed) {
-      SoundManager.ko();
-      const [minM, maxM] = enemy.stats.moneyRange;
-      const moneyBonusFrac = (source || this.player).stats.moneyBonusFrac;
-      const reward = Math.round(randInt(minM, maxM) * (1 + moneyBonusFrac));
-      this.moneyThisRun += reward;
-      this.run.money += reward;
-      this.floatingTexts.push(new FloatingText(enemy.x, enemy.y - 34, `+${reward}€`, "#4fd07a"));
-      this.waveEnemiesDefeated++;
-      SoundManager.coin();
-      this.rollPickupDrop(enemy);
-      if (source) {
-        source.runStats.kills++;
-        source.runStats.moneyEarned += reward;
-        if (weaponId) source.runStats.killsByWeapon[weaponId] = (source.runStats.killsByWeapon[weaponId] || 0) + 1;
-      }
-    } else {
-      SoundManager.hitEnemy();
-    }
-  }
-
-  // A drive-by car that reaches the far edge alive just leaves — it still
-  // has to count against the wave total (same bookkeeping as a kill) or the
-  // wave would never complete, but it pays no money since nobody beat it.
-  onDrivebyExit() {
-    this.waveEnemiesDefeated++;
-  }
-
-  // At most one pickup per kill: a medikit if any active player could use
-  // one, otherwise a shot at ammo if any of them carries a gun.
-  rollPickupDrop(enemy) {
-    const cfg = CONFIG.pickup;
-    const players = this.activePlayers;
-    const anyNeedsHeal = players.some(p => p.hp < p.maxHp * 0.9);
-    if (Math.random() < cfg.medikitChance && anyNeedsHeal) {
-      const heal = Math.round(this.player.maxHp * cfg.medikitHealFraction);
-      this.pickups.push(new Pickup(enemy.x, enemy.y, "health", heal));
-      return;
-    }
-    if (players.some(p => p.ranged) && Math.random() < cfg.ammoChance) {
-      const amount = randInt(cfg.ammoAmountRange[0], cfg.ammoAmountRange[1]);
-      this.pickups.push(new Pickup(enemy.x, enemy.y, "ammo", amount));
-    }
-  }
-
-  // `actor` is whichever active player is closest to the pickup — see the
-  // call site in update(), which already picked that out.
-  collectPickup(pickup, actor = this.player) {
-    if (pickup.kind === "health") {
-      const before = actor.hp;
-      actor.hp = clamp(actor.hp + pickup.amount, 0, actor.maxHp);
-      const healed = Math.round(actor.hp - before);
-      if (healed > 0) {
-        this.floatingTexts.push(new FloatingText(actor.x, actor.y - 26, `+${healed} HP`, "#3ddc71"));
-        SoundManager.heal();
-      }
-    } else if (pickup.kind === "ammo" && actor.ranged) {
-      const add = Math.min(pickup.amount, actor.ranged.maxAmmo - actor.ammo);
-      if (add > 0) {
-        actor.ammo += add;
-        this.floatingTexts.push(new FloatingText(actor.x, actor.y - 26, `+${add} munizioni`, "#ffd24a"));
-        SoundManager.ammoPickup();
-      }
-    }
-  }
-
-  // `actor` is whichever player actually took the hit — see the call site
-  // in update(). The stolen money still comes out of the shared run purse.
-  onPlayerHit(actor = this.player) {
-    if (this.run.money <= 0) return;
-    const stealFrac = 0.05;
-    const reduction = actor.stats.stealReduction;
-    let stolen = Math.round(this.run.money * stealFrac * (1 - reduction));
-    stolen = Math.min(stolen, this.run.money);
-    if (stolen > 0) {
-      this.run.money -= stolen;
-      this.moneyThisRun -= Math.min(stolen, Math.max(0, this.moneyThisRun));
-      this.floatingTexts.push(new FloatingText(actor.x, actor.y - 26, `-${stolen}€ rubati!`, "#d9455f"));
-    }
   }
 
   toggleUpgradeMenu() {
-    if (this.state === "playing") {
-      this.openUpgradeMenu("pause");
-    } else if (this.state === "paused") {
-      this.closeUpgradeMenu();
-    }
+    if (this.state !== "playing") return;
+    if (!this.player.shopOpen) this.openUpgradeMenu("pause");
+    else this.closeUpgradeMenu();
   }
 
+  // Host's own local shop panel. Opening it no longer pauses the whole
+  // game (see this.player.shopOpen and update()'s per-player gating) — it
+  // only freezes the host's own movement/actions, everyone else (other
+  // players, enemies, spawns) keeps going in real time.
   openUpgradeMenu(mode) {
     this.menuMode = mode; // 'pause' | 'zoneComplete'
-    this.state = "paused";
+    this.player.shopOpen = true;
     const title = document.getElementById("upgrade-title");
     const subtitle = document.getElementById("upgrade-subtitle");
     const btn = document.getElementById("upgrade-continue-btn");
     if (mode === "zoneComplete") {
       title.textContent = `Zona ${this.zone} completata!`;
-      subtitle.textContent = "Spendi i tuoi soldi per rinforzare casa tua prima di addentrarti ancora di più.";
-      btn.textContent = "Addentrati nel quartiere";
+      subtitle.textContent = "Spendi i tuoi soldi, poi conferma di essere pronto per la prossima zona.";
+      btn.textContent = "Sono pronto";
     } else {
       title.textContent = "Pausa — Potenzia casa";
       subtitle.textContent = "";
@@ -3049,42 +1274,54 @@ class Game {
     this.renderShopStats();
     this.activeShopSection = null; // always land on the stats home screen first
     this.applyShopSectionVisibility();
+    this.renderShopContent();
+    document.getElementById("upgrade-screen").classList.remove("hidden");
+    document.getElementById("mp-wait-overlay").classList.add("hidden");
+    this.saveGame();
+  }
+
+  // Shared by openUpgradeMenu (host) and applyGuestShopSync (guest, on every
+  // fresh snapshot while their panel stays open) — everything here reads
+  // off this.player.run/this.player, which is either the real thing (host)
+  // or a mirror kept fresh from the network (guest).
+  renderShopContent() {
+    const run = this.player.run;
     this.renderUpgradeList();
-    this.renderWeaponList("melee-weapon-list", MELEE_WEAPONS, this.run.meleeTier, this.run.meleeWeaponUpgrades, (idx) => this.buyMeleeWeapon(idx));
-    this.renderWeaponUpgrades("melee-weapon-upgrades-section", "melee-weapon-upgrades", MELEE_WEAPONS, this.run.meleeTier, this.run.meleeWeaponUpgrades, (id, cost) => this.buyMeleeWeaponUpgrade(id, cost));
-    this.renderWeaponList("ranged-weapon-list", RANGED_WEAPONS, this.run.rangedTier, this.run.rangedWeaponUpgrades, (idx) => this.buyRangedWeapon(idx));
-    if (this.run.rangedTier >= 0) {
-      this.renderWeaponUpgrades("ranged-weapon-upgrades-section", "ranged-weapon-upgrades", RANGED_WEAPONS, this.run.rangedTier, this.run.rangedWeaponUpgrades, (id, cost) => this.buyRangedWeaponUpgrade(id, cost));
+    this.renderWeaponList("melee-weapon-list", MELEE_WEAPONS, run.meleeTier, run.meleeWeaponUpgrades, (idx) => this.buyMeleeWeapon(idx));
+    this.renderWeaponUpgrades("melee-weapon-upgrades-section", "melee-weapon-upgrades", MELEE_WEAPONS, run.meleeTier, run.meleeWeaponUpgrades, (id, cost) => this.buyMeleeWeaponUpgrade(id, cost));
+    this.renderWeaponList("ranged-weapon-list", RANGED_WEAPONS, run.rangedTier, run.rangedWeaponUpgrades, (idx) => this.buyRangedWeapon(idx));
+    if (run.rangedTier >= 0) {
+      this.renderWeaponUpgrades("ranged-weapon-upgrades-section", "ranged-weapon-upgrades", RANGED_WEAPONS, run.rangedTier, run.rangedWeaponUpgrades, (id, cost) => this.buyRangedWeaponUpgrade(id, cost));
     } else {
       document.getElementById("ranged-weapon-upgrades-section").classList.add("hidden");
     }
     this.renderAmmoShop();
     this.renderBombShop();
-    document.getElementById("upgrade-screen").classList.remove("hidden");
-    this.saveGame();
   }
 
   closeUpgradeMenu() {
     document.getElementById("upgrade-screen").classList.add("hidden");
+    this.player.shopOpen = false;
     if (this.menuMode === "zoneComplete") {
-      this.zone++;
-      this.startZone();
+      this.player.readyForNextZone = true;
+      this.sim.tryAdvanceZone();
     }
-    this.state = "playing";
     this.menuMode = null;
+    this.updateWaitOverlay();
   }
 
-  costFor(upg, level) {
-    return Math.round(upg.baseCost * Math.pow(upg.growth, level));
-  }
+  // beginZoneClear/tryAdvanceZone moved to Simulation — see
+  // this.sim.tryAdvanceZone() above; beginZoneClear() is called internally
+  // by Simulation.tick() (see justEnteredZoneClear in update() below).
 
   renderUpgradeList() {
+    const run = this.player.run;
     const list = document.getElementById("upgrade-list");
     list.innerHTML = "";
     UPGRADES.forEach(upg => {
-      const level = this.run.upgrades[upg.id] || 0;
+      const level = run.upgrades[upg.id] || 0;
       const maxed = level >= upg.maxLevel;
-      const cost = maxed ? null : this.costFor(upg, level);
+      const cost = maxed ? null : this.sim.costFor(upg, level);
 
       const card = document.createElement("div");
       card.className = "upgrade-card";
@@ -3093,36 +1330,27 @@ class Game {
         <p>${upg.desc}</p>
         <div class="row">
           <span class="level">Lv. ${level}/${upg.maxLevel}</span>
-          <button ${maxed || cost > this.run.money ? "disabled" : ""}>
+          <button ${maxed || cost > run.money ? "disabled" : ""}>
             ${maxed ? "MAX" : `Acquista — ${cost}€`}
           </button>
         </div>
       `;
       if (!maxed) {
-        card.querySelector("button").addEventListener("click", () => {
-          if (this.run.money >= cost) {
-            this.run.money -= cost;
-            this.run.upgrades[upg.id] = level + 1;
-            this.run.playerLevel++;
-            this.refreshAllLoadouts();
-            if (upg.id === "firstaid") {
-              // Buying more max HP also tops every player up to at least 3/4
-              // of the new max, instead of just preserving whatever HP was
-              // missing before the purchase (refreshLoadout's default) —
-              // never reduces current HP if it's already higher than that.
-              this.player.hp = Math.max(this.player.hp, Math.round(this.player.maxHp * 0.75));
-              for (const entry of this.remotePlayers.values()) {
-                entry.player.hp = Math.max(entry.player.hp, Math.round(entry.player.maxHp * 0.75));
-              }
-            }
-            this.renderUpgradeList();
-            this.updateHUDStatic();
-          }
-        });
+        card.querySelector("button").addEventListener("click", () => this.buyUpgrade(upg.id));
       }
       list.appendChild(card);
     });
-    document.getElementById("upgrade-money").textContent = `€ ${this.run.money}`;
+    document.getElementById("upgrade-money").textContent = `€ ${run.money}`;
+  }
+
+  // applyUpgradePurchase (pure mutation, no UI/network side effects) moved
+  // to Simulation — shared by this handler and applyRemoteAction (guest
+  // purchases, applied host-side to that guest's own player).
+  buyUpgrade(id) {
+    if (this.network.isMultiplayer) { this.network.send({ type: "action", action: "buyUpgrade", id }); return; }
+    this.sim.applyUpgradePurchase(this.player, id);
+    this.renderUpgradeList();
+    this.updateHUDStatic();
   }
 
   // Shared renderer for the sequential melee/ranged weapon tracks: only the
@@ -3151,7 +1379,7 @@ class Game {
       } else if (zoneLocked) {
         statusHtml = `<span class="level">Bloccata</span><button disabled>Si sblocca alla zona ${weapon.minZone}</button>`;
       } else {
-        const affordable = weapon.cost <= this.run.money;
+        const affordable = weapon.cost <= this.player.run.money;
         statusHtml = `<span class="level">&nbsp;</span><button ${affordable ? "" : "disabled"}>Acquista — ${weapon.cost}€</button>`;
       }
 
@@ -3182,7 +1410,7 @@ class Game {
     container.innerHTML = "";
     weapon.upgrades.forEach(upg => {
       const isOwned = owned.has(upg.id);
-      const affordable = upg.cost <= this.run.money;
+      const affordable = upg.cost <= this.player.run.money;
       const card = document.createElement("div");
       card.className = "upgrade-card";
       card.innerHTML = `
@@ -3200,52 +1428,34 @@ class Game {
     });
   }
 
+  // applyMeleeWeaponPurchase/applyRangedWeaponPurchase/
+  // applyMeleeWeaponUpgradePurchase/applyRangedWeaponUpgradePurchase all
+  // moved to Simulation — same pattern as buyUpgrade above.
   buyMeleeWeapon(idx) {
-    const weapon = MELEE_WEAPONS[idx];
-    const current = MELEE_WEAPONS[this.run.meleeTier];
-    if (idx !== this.run.meleeTier + 1 || this.run.money < weapon.cost) return;
-    if (!allWeaponUpgradesOwned(current, this.run.meleeWeaponUpgrades)) return;
-    this.run.money -= weapon.cost;
-    this.run.meleeTier = idx;
-    this.run.playerLevel++;
-    this.refreshAllLoadouts();
-    this.openUpgradeMenu(this.menuMode);
+    if (this.network.isMultiplayer) { this.network.send({ type: "action", action: "buyMeleeWeapon", idx }); return; }
+    this.sim.applyMeleeWeaponPurchase(this.player, idx);
+    this.renderShopContent();
     this.updateHUDStatic();
   }
 
   buyRangedWeapon(idx) {
-    const weapon = RANGED_WEAPONS[idx];
-    if (idx !== this.run.rangedTier + 1 || this.run.money < weapon.cost) return;
-    if (weapon.minZone && this.zone < weapon.minZone) return;
-    if (this.run.rangedTier >= 0) {
-      const current = RANGED_WEAPONS[this.run.rangedTier];
-      if (!allWeaponUpgradesOwned(current, this.run.rangedWeaponUpgrades)) return;
-    }
-    this.run.money -= weapon.cost;
-    this.run.rangedTier = idx;
-    this.run.playerLevel++;
-    this.refreshAllLoadouts();
-    this.openUpgradeMenu(this.menuMode);
+    if (this.network.isMultiplayer) { this.network.send({ type: "action", action: "buyRangedWeapon", idx }); return; }
+    this.sim.applyRangedWeaponPurchase(this.player, idx);
+    this.renderShopContent();
     this.updateHUDStatic();
   }
 
   buyMeleeWeaponUpgrade(id, cost) {
-    if (this.run.meleeWeaponUpgrades.includes(id) || this.run.money < cost) return;
-    this.run.money -= cost;
-    this.run.meleeWeaponUpgrades.push(id);
-    this.run.playerLevel++;
-    this.refreshAllLoadouts();
-    this.openUpgradeMenu(this.menuMode);
+    if (this.network.isMultiplayer) { this.network.send({ type: "action", action: "buyMeleeWeaponUpgrade", id, cost }); return; }
+    this.sim.applyMeleeWeaponUpgradePurchase(this.player, id, cost);
+    this.renderShopContent();
     this.updateHUDStatic();
   }
 
   buyRangedWeaponUpgrade(id, cost) {
-    if (this.run.rangedWeaponUpgrades.includes(id) || this.run.money < cost) return;
-    this.run.money -= cost;
-    this.run.rangedWeaponUpgrades.push(id);
-    this.run.playerLevel++;
-    this.refreshAllLoadouts();
-    this.openUpgradeMenu(this.menuMode);
+    if (this.network.isMultiplayer) { this.network.send({ type: "action", action: "buyRangedWeaponUpgrade", id, cost }); return; }
+    this.sim.applyRangedWeaponUpgradePurchase(this.player, id, cost);
+    this.renderShopContent();
     this.updateHUDStatic();
   }
 
@@ -3259,7 +1469,8 @@ class Game {
       return;
     }
     section.classList.remove("hidden");
-    const weapon = RANGED_WEAPONS[this.run.rangedTier];
+    const run = this.player.run;
+    const weapon = RANGED_WEAPONS[run.rangedTier];
     const cap = weapon.maxAmmo;
     const current = this.player.ammo;
     const chunk = Math.min(10, cap - current);
@@ -3273,7 +1484,7 @@ class Game {
       <p>Scorta attuale: ${current}/${cap}</p>
       <div class="row">
         <span class="level">&nbsp;</span>
-        <button ${chunk <= 0 || cost > this.run.money ? "disabled" : ""}>
+        <button ${chunk <= 0 || cost > run.money ? "disabled" : ""}>
           ${chunk <= 0 ? "Scorta piena" : `Rifornisci +${chunk} — ${cost}€`}
         </button>
       </div>
@@ -3284,34 +1495,23 @@ class Game {
     container.appendChild(card);
   }
 
+  // applyAmmoPurchase moved to Simulation.
   buyAmmo() {
-    if (!this.player.ranged) return;
-    const weapon = RANGED_WEAPONS[this.run.rangedTier];
-    const chunk = Math.min(10, weapon.maxAmmo - this.player.ammo);
-    if (chunk <= 0) return;
-    const cost = Math.ceil(chunk * weapon.costPerAmmo);
-    if (this.run.money < cost) return;
-    this.run.money -= cost;
-    this.player.ammo += chunk;
+    if (this.network.isMultiplayer) { this.network.send({ type: "action", action: "buyAmmo" }); return; }
+    this.sim.applyAmmoPurchase(this.player);
     this.renderAmmoShop();
     this.updateHUDStatic();
   }
 
-  // Consumable throwables: bought one at a time, stacked up to maxCarry.
-  // Base maxCarry plus the flat "Zaino esplosivi" house-upgrade bonus,
-  // applied uniformly to every throwable type.
-  bombCapacityFor(type) {
-    return type.maxCarry + (this.player.stats.bombCapacityBonus || 0);
-  }
-
   renderBombShop() {
+    const run = this.player.run;
     const container = document.getElementById("bomb-shop");
     container.innerHTML = "";
     THROWABLES.forEach(type => {
-      const count = this.run.bombs[type.id] || 0;
-      const cap = this.bombCapacityFor(type);
+      const count = run.bombs[type.id] || 0;
+      const cap = this.sim.bombCapacityFor(type, this.player);
       const atCap = count >= cap;
-      const affordable = type.cost <= this.run.money;
+      const affordable = type.cost <= run.money;
       const card = document.createElement("div");
       card.className = "upgrade-card";
       card.innerHTML = `
@@ -3331,13 +1531,10 @@ class Game {
     });
   }
 
+  // applyBombPurchase moved to Simulation.
   buyBomb(id) {
-    const type = THROWABLES.find(t => t.id === id);
-    if (!type) return;
-    const count = this.run.bombs[id] || 0;
-    if (count >= this.bombCapacityFor(type) || this.run.money < type.cost) return;
-    this.run.money -= type.cost;
-    this.run.bombs[id] = count + 1;
+    if (this.network.isMultiplayer) { this.network.send({ type: "action", action: "buyBomb", id }); return; }
+    this.sim.applyBombPurchase(this.player, id);
     this.renderBombShop();
     this.updateHUDStatic();
   }
@@ -3348,8 +1545,12 @@ class Game {
     document.getElementById("gameover-screen").classList.toggle("hidden", state !== "gameover");
     document.getElementById("hud").classList.toggle("hidden", state === "menu");
     document.getElementById("pause-hint").classList.toggle("hidden", state === "menu" || state === "gameover");
-    if (state !== "paused") {
+    // Shop visibility is no longer tied to a global "paused" state (see
+    // this.player.shopOpen) — only force it closed when leaving a run
+    // entirely, so nobody's left staring at a stale shop screen.
+    if (state === "menu" || state === "gameover") {
       document.getElementById("upgrade-screen").classList.add("hidden");
+      document.getElementById("mp-wait-overlay").classList.add("hidden");
     }
   }
 
@@ -3362,17 +1563,17 @@ class Game {
   }
 
   updateHUDStatic() {
-    document.getElementById("money-label").textContent = `€ ${this.run.money}`;
+    document.getElementById("money-label").textContent = `€ ${this.player.run.money}`;
   }
 
   updateHUD() {
     const hpFrac = clamp(this.player.hp / this.player.maxHp, 0, 1);
     document.getElementById("hp-fill").style.width = `${hpFrac * 100}%`;
     document.getElementById("hp-label").textContent = `${Math.round(this.player.hp)} / ${this.player.maxHp}`;
-    document.getElementById("zone-label").textContent = `Zona ${this.zone} — ${this.zoneName(this.zone)}`;
+    document.getElementById("zone-label").textContent = `Zona ${this.zone} — ${zoneName(this.zone)}`;
     const remaining = this.waveTotalEnemies - this.waveEnemiesDefeated;
     document.getElementById("wave-label").textContent = `Nemici rimasti: ${remaining}`;
-    document.getElementById("money-label").textContent = `€ ${this.run.money}`;
+    document.getElementById("money-label").textContent = `€ ${this.player.run.money}`;
 
     const dashFrac = 1 - clamp(this.player.dashCooldownTimer / this.player.stats.dashCooldown, 0, 1);
     let fill = document.querySelector("#dash-indicator .fill");
@@ -3403,156 +1604,65 @@ class Game {
       rangedIndicator.classList.add("hidden");
     }
     const bombType = THROWABLES[this.player.selectedThrowable];
-    const bombCount = this.run.bombs[bombType.id] || 0;
+    const bombCount = this.player.run.bombs[bombType.id] || 0;
     document.getElementById("bomb-label").textContent = `${bombType.name} x${bombCount}`;
   }
 
   // Guest: no local simulation at all — just poll our own input and ship it
-  // to the host at a throttled rate. Everything on screen instead comes
-  // from applySnapshot()/draw()'s drawFromSnapshot() path.
-  updateGuest(dt) {
+  // to the server at a fixed rate (CONFIG.tickRate, same clock the loop()
+  // below steps solo play's own simulation at) — this, not this device's
+  // own display framerate, is what determines how often our input actually
+  // reaches the game, so a weaker phone doesn't feel less responsive than a
+  // powerful one. Everything on screen instead comes from
+  // applySnapshot()/draw()'s drawFromSnapshot() path. Used by every
+  // multiplayer client alike — the room creator included, since nobody's
+  // own device simulates anymore (see server.js).
+  updateNetworked(dt) {
     this._stateSendTimer -= dt;
     if (this._stateSendTimer <= 0) {
-      this._stateSendTimer = 1 / 100;
-      const move = {
-        up: this.input.isDown("up"), down: this.input.isDown("down"),
-        left: this.input.isDown("left"), right: this.input.isDown("right"),
-      };
-      const moveVec = this.input.moveVec; // continuous 360° direction, or null (keyboard-only)
+      this._stateSendTimer = 1 / CONFIG.tickRate;
+      // My own shop is open: send neutral input so the server holds my
+      // character still (autoFireRanged/autoMeleeAttack act on proximity
+      // alone, not held input, so a flag is needed — see applyRemoteState).
+      const shopOpen = this.player.shopOpen;
+      const move = shopOpen
+        ? { up: false, down: false, left: false, right: false }
+        : {
+            up: this.input.isDown("up"), down: this.input.isDown("down"),
+            left: this.input.isDown("left"), right: this.input.isDown("right"),
+          };
+      const moveVec = shopOpen ? null : this.input.moveVec; // continuous 360° direction, or null (keyboard-only)
       const stickAim = this.input.gpAim || this.input.touchAim;
-      const aim = stickAim ? { x: stickAim.x, y: stickAim.y } : null;
-      this.network.send({ type: "state", move, moveVec, aim });
+      const aim = shopOpen ? null : (stickAim ? { x: stickAim.x, y: stickAim.y } : null);
+      this.network.send({ type: "state", move, moveVec, aim, shopOpen, isTouchDevice: this.isTouchDevice });
     }
   }
 
   update(dt) {
-    if (this.network.isGuest) { this.updateGuest(dt); return; }
-
-    // Host -> guest snapshot broadcast. Runs regardless of this.state so a
-    // connected guest still sees the pause/shop/game-over overlays, not
-    // just live combat — see the early return for "playing"-only logic below.
-    if (this.network.isHost && this.remotePlayers.size > 0) {
-      this._snapshotTimer -= dt;
-      if (this._snapshotTimer <= 0) {
-        this._snapshotTimer = 1 / 100;
-        this.sendSnapshot();
-      }
-    }
+    // Any multiplayer client (room creator included) is a thin client:
+    // send input, render whatever the server's snapshot says — see
+    // server.js, the sole simulation authority once a room exists. Only
+    // fully offline/solo play runs a local Simulation.tick() below.
+    if (this.network.isMultiplayer) { this.updateNetworked(dt); return; }
 
     if (this.state !== "playing") return;
 
-    this.player.update(dt, this.input);
-    // Attack/shoot/dash are held down rather than edge-triggered (there's no
-    // "keydown" equivalent for a polled gamepad); their own cooldowns already
-    // throttle this the same way holding a keyboard key would. Melee and
-    // manual ranged fire have no touch equivalent — see the auto-melee call
-    // and autoFireRanged below instead.
-    if (this.input.gpAttack) this.player.tryAttack(this);
-    if (this.input.gpRanged) this.player.tryRangedAttack(this);
-    if (this.input.gpDash || this.input.touchDash) this.player.tryDash();
-    // Hands-free shooting: fires on its own whenever the aim rests on an
-    // enemy, on top of (not instead of) the manual F/R2 trigger above.
-    this.player.autoFireRanged(this);
-    // Touch has no attack button (see autoMeleeAttack) — melee triggers on
-    // its own whenever an enemy is in range, so the freed-up thumb can aim
-    // instead. Keyboard/gamepad melee stays the manual gpAttack/Space above.
-    if (this.isTouchDevice) this.player.autoMeleeAttack(this);
+    // Everything that used to happen inline here (player/enemy/projectile/
+    // pickup/bomb updates, spawning, zone progression) now lives in
+    // Simulation.tick() — see simulation.js. gameOver/justEnteredZoneClear
+    // are edge-triggered flags tick() sets for us to react to below.
+    this.sim.tick(dt, this.input, this.isTouchDevice);
 
-    // Host-side simulation of every other connected player: each is driven
-    // by the last continuous input state it sent (see applyRemoteState),
-    // with discrete actions (attack/dash/...) applied immediately as they
-    // arrive over the socket — see applyRemoteAction.
-    for (const entry of this.remotePlayers.values()) {
-      if (entry.player.hp <= 0) continue;
-      entry.player.update(dt, entry.input);
-      entry.player.autoFireRanged(this);
-      if (entry.isTouchDevice) entry.player.autoMeleeAttack(this);
-    }
-
-    if (this.enemiesToSpawn > 0) {
-      this.spawnTimer -= dt;
-      const concurrentCap = Math.min(2 + Math.floor((this.zone - 1) / 2), CONFIG.maxConcurrentEnemies);
-      if (this.spawnTimer <= 0 && this.enemies.filter(e => !e.dead).length < concurrentCap) {
-        this.spawnEnemy();
-        this.enemiesToSpawn--;
-        this.spawnTimer = CONFIG.spawnInterval;
-      }
-    }
-
-    // Each enemy targets whichever active player is nearest to IT — this is
-    // the only change needed for co-op AI, since every behavior branch
-    // inside Enemy already just uses whatever `player` it's handed.
-    for (const enemy of this.enemies) {
-      enemy.update(dt, this.nearestPlayerTo(enemy.x, enemy.y), this);
-    }
-    this.enemies = this.enemies.filter(e => !e.dead);
-
-    for (const proj of this.projectiles) {
-      if (proj.dead) continue;
-      proj.update(dt, this.enemies);
-      if (proj.owner === "enemy") {
-        for (const p of this.activePlayers) {
-          if (proj.dead) break;
-          if (dist(proj.x, proj.y, p.x, p.y) <= proj.radius + p.radius) {
-            const hit = p.takeDamage(proj.damage);
-            if (hit) this.onPlayerHit(p);
-            proj.dead = true;
-          }
-        }
-      } else {
-        for (const enemy of this.enemies) {
-          if (enemy.dead || proj.dead) continue;
-          if (dist(proj.x, proj.y, enemy.x, enemy.y) <= proj.radius + enemy.radius) {
-            if (proj.splashRadius) {
-              // Rocket: damages every enemy within the blast, not just the one hit.
-              SoundManager.explosion();
-              for (const e2 of this.enemies) {
-                if (!e2.dead && dist(proj.x, proj.y, e2.x, e2.y) <= proj.splashRadius) {
-                  this.damageEnemy(e2, proj.damage, proj.shooter, proj.weaponId);
-                }
-              }
-            } else if (proj.instaKill) {
-              // Thrown knife: kills outright regardless of remaining HP.
-              this.damageEnemy(enemy, enemy.hp, proj.shooter, proj.weaponId);
-            } else {
-              this.damageEnemy(enemy, proj.damage, proj.shooter, proj.weaponId);
-            }
-            proj.dead = true;
-          }
-        }
-      }
-    }
-    this.projectiles = this.projectiles.filter(p => !p.dead);
-
-    for (const pickup of this.pickups) {
-      if (pickup.dead) continue;
-      pickup.update(dt);
-      if (pickup.dead) continue;
-      for (const p of this.activePlayers) {
-        if (dist(p.x, p.y, pickup.x, pickup.y) <= p.radius + pickup.radius) {
-          this.collectPickup(pickup, p);
-          pickup.dead = true;
-          break;
-        }
-      }
-    }
-    this.pickups = this.pickups.filter(p => !p.dead);
-
-    for (const bomb of this.bombs) bomb.update(dt, this);
-    this.bombs = this.bombs.filter(b => !b.dead);
-
-    for (const ft of this.floatingTexts) ft.update(dt);
-    this.floatingTexts = this.floatingTexts.filter(ft => !ft.dead);
-
-    if (this.activePlayers.length === 0) {
+    if (this.sim.gameOver && this.state !== "gameover") {
       this.triggerGameOver();
       return;
     }
-
-    if (this.enemiesToSpawn === 0 && this.enemies.length === 0 && this.waveEnemiesDefeated >= this.waveTotalEnemies) {
+    if (this.sim.justEnteredZoneClear) {
+      this.sim.justEnteredZoneClear = false;
       this.openUpgradeMenu("zoneComplete");
     }
 
+    this.updateWaitOverlay();
     this.updateHUD();
   }
 
@@ -3585,11 +1695,47 @@ class Game {
       ctx.fillStyle = `rgba(120, 20, 30, ${darkness * 0.12})`;
       ctx.fillRect(0, 0, CONFIG.width, CONFIG.height);
     }
+
+    // Park paths: the lanes the drive-by car travels (see generateParkLayout)
+    // — drawn as a plain lighter strip since there's no dedicated ground
+    // texture asset, just enough to visually read as "the path" versus the
+    // grass the rest of the obstacles sit on.
+    for (const path of this.parkPaths) {
+      ctx.fillStyle = "rgba(255,255,255,0.05)";
+      ctx.fillRect(0, path.y - path.height / 2, CONFIG.width, path.height);
+    }
+  }
+
+  // Shared by both the host's live draw() and the guest's drawFromSnapshot()
+  // — park objects are static (no interpolation needed), so both paths can
+  // draw straight from whatever list (live this.parkObjects, or the latest
+  // snapshot's) is handed in.
+  drawParkObjects(ctx, objects) {
+    for (const obj of objects) {
+      if (obj.hp <= 0) continue;
+      const stage = objectDamageStage(obj.hp, obj.maxHp);
+      const sprite = Sprites.get(`object_${obj.typeKey}_${stage}`);
+      ctx.save();
+      ctx.translate(obj.x, obj.y);
+      if (sprite) {
+        drawSpriteFit(ctx, sprite, obj.radius * 2.6);
+      } else {
+        ctx.fillStyle = "#4a4438";
+        ctx.beginPath();
+        ctx.arc(0, 0, obj.radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = "#00000055";
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
   }
 
   draw() {
-    if (this.network.isGuest) { this.drawFromSnapshot(); return; }
+    if (this.network.isMultiplayer) { this.drawFromSnapshot(); return; }
     this.drawBackground();
+    this.drawParkObjects(this.ctx, this.parkObjects);
     for (const bomb of this.bombs) bomb.draw(this.ctx);
     for (const pickup of this.pickups) pickup.draw(this.ctx);
     for (const enemy of this.enemies) enemy.draw(this.ctx);
@@ -3618,8 +1764,11 @@ class Game {
     const me = players.find(p => p.id === this.network.myId);
     const others = players.filter(p => p.id !== this.network.myId);
 
-    // Bombs/pickups/floating texts don't move (or barely do), so they're
-    // drawn straight from the latest snapshot with no interpolation.
+    // Bombs/pickups/park objects/floating texts don't move (or barely do),
+    // so they're drawn straight from the latest snapshot with no
+    // interpolation. this.parkPaths is updated in applySnapshot() so
+    // drawBackground() (called above) already drew the right path strips.
+    this.drawParkObjects(this.ctx, curr.parkObjects || []);
     for (const bomb of curr.bombs) this.mkBomb(bomb).draw(this.ctx);
     for (const pickup of curr.pickups) this.mkPickup(pickup).draw(this.ctx);
     for (const enemy of enemies) this.mkEnemy(enemy).draw(this.ctx);
@@ -3629,11 +1778,25 @@ class Game {
     for (const ft of curr.floatingTexts) this.mkText(ft).draw(this.ctx);
   }
 
+  // Fixed-timestep accumulator: the simulation always advances in identical
+  // CONFIG.tickRate steps (see its comment in simulation.js) regardless of
+  // the actual render framerate, so game speed can never depend on how
+  // fast/slow a given device renders. draw() still runs once per rendered
+  // frame for smooth visuals — it just shows the sim state after however
+  // many fixed steps happened to run that frame (usually one).
   loop(now) {
-    const dt = Math.min(0.05, (now - this.lastTime) / 1000);
+    const FIXED_DT = 1 / CONFIG.tickRate;
+    // Clamp a long stall (tab backgrounded, phone locked, ...) to at most a
+    // handful of ticks' worth, so the game "loses" that time instead of
+    // trying to fast-forward through it in a burst once it resumes.
+    const frameDt = Math.min(FIXED_DT * 8, (now - this.lastTime) / 1000);
     this.lastTime = now;
     this.input.pollGamepad();
-    this.update(dt);
+    this._tickAccumulator += frameDt;
+    while (this._tickAccumulator >= FIXED_DT) {
+      this.update(FIXED_DT);
+      this._tickAccumulator -= FIXED_DT;
+    }
     this.draw();
     requestAnimationFrame(this.loop);
   }
