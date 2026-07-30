@@ -725,7 +725,12 @@ class Game {
       document.documentElement.classList.toggle("portrait-controls", isTouch && portrait);
       document.documentElement.classList.toggle("landscape-controls", isTouch && !portrait);
       if (isTouch) {
-        this.portraitRotated = false;
+        // Touch devices rotate the field visually via CSS (#canvas-rotate-wrap,
+        // see style.css) whenever portrait-controls is active, not via this
+        // container transform — but bindJoystick()/bindAimStick() still need to
+        // know when that CSS rotation is in effect, so they can counter-rotate
+        // raw drag input back into the field's own (unrotated) coordinate space.
+        this.portraitRotated = portrait;
         const total = portrait ? PORTRAIT_TOTAL : LANDSCAPE_TOTAL;
         const scale = Math.min(window.innerWidth / total.w, window.innerHeight / total.h);
         container.style.transform = `scale(${scale})`;
@@ -1146,7 +1151,7 @@ class Game {
     if (mode === "zoneComplete") {
       title.textContent = `Zona ${this.zone} completata!`;
       subtitle.textContent = "Spendi i tuoi soldi, poi conferma di essere pronto per la prossima zona.";
-      btn.textContent = "Sono pronto";
+      btn.textContent = "Pronto";
     } else {
       title.textContent = "Pausa — Potenzia casa";
       subtitle.textContent = "";
@@ -1279,7 +1284,7 @@ class Game {
     if (mode === "zoneComplete") {
       title.textContent = `Zona ${this.zone} completata!`;
       subtitle.textContent = "Spendi i tuoi soldi, poi conferma di essere pronto per la prossima zona.";
-      btn.textContent = "Sono pronto";
+      btn.textContent = "Pronto";
     } else {
       title.textContent = "Pausa — Potenzia casa";
       subtitle.textContent = "";
