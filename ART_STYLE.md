@@ -199,11 +199,49 @@ a park street lamp post seen from directly above, circular light fixture at the 
 
 ---
 
-## 4. Convenzioni di naming file
+## 4. SFONDO PARCO E SENTIERO
+
+A differenza di personaggi/armi/oggetti, questi NON vanno isolati su sfondo nero: sono texture a piena inquadratura che coprono l'intero campo (sfondo) o una striscia ripetuta orizzontalmente (sentiero). Il campo è sempre un prato di parco; il sentiero è la corsia su cui passa l'auto del drive-by (vedi `Simulation.generateParkLayout`).
+
+### Prompt base (sfondo parco)
+```
+Top-down pixel art game background texture, aerial view of a park lawn viewed from directly above (bird's-eye view, camera perfectly perpendicular to the ground), 32-bit retro pixel art style, [DESCRIZIONE SPECIFICA], grass texture filling the entire frame edge-to-edge with subtle tone variation, no objects, no people, no paths, no borders, no vignette, consistent pixel art game style, game background asset, high detail pixel work, square aspect ratio 1:1
+```
+
+### Negative prompt (sfondo parco)
+```
+people, characters, hands, objects, benches, trees, paths, roads, text, watermark, signature, blurry, photorealistic, 3D render, low quality, border, frame, vignette, black background
+```
+
+### 5 varianti ([DESCRIZIONE SPECIFICA])
+
+Cambiano leggermente colore erba e/o aggiungono dettagli intangibili (mai ostacoli reali — solo decorazione, il gioco non li tratta come oggetti collidibili):
+
+1. **Base:** `lush green grass with small dirt patches and scattered leaves`
+2. **Erba più chiara:** `bright yellow-green grass, sun-bleached patches, a few small wildflowers`
+3. **Con laghetto:** `deep green grass with a small round pond of blue water in one corner, reeds along its edge`
+4. **Erba autunnale:** `deep green grass covered with scattered orange and brown fallen leaves`
+5. **Erba serale:** `cool bluish-green grass with faint long shadows, a couple of small flower patches`
+
+### Prompt base (sentiero)
+```
+Top-down pixel art game background texture, a paved park walkway viewed from directly above (bird's-eye view, camera perfectly perpendicular to the ground), 32-bit retro pixel art style, light gray stone pavement with subtle tile seams and weathering, straight horizontal strip filling the entire frame edge-to-edge, no grass, no objects, no people, no borders, no vignette, consistent pixel art game style, game background asset, high detail pixel work, square aspect ratio 1:1
+```
+
+### Negative prompt (sentiero)
+```
+people, characters, hands, objects, grass, vehicles, text, watermark, signature, blurry, photorealistic, 3D render, low quality, border, frame, vignette, black background
+```
+
+---
+
+## 5. Convenzioni di naming file
 
 - Personaggi: `generated-images/pixel/[nome-personaggio].png`
 - Armi: `generated-images/pixel/weapon_[nome-arma].png`
 - Oggetti: `generated-images/pixel/object_[nome-oggetto]_[fase 1-5].png`
+- Sfondo parco: `generated-images/pixel/park_bg_[1-5].png`
+- Sentiero: `generated-images/pixel/park_path.png`
 - Usare sempre trattini (`-`) per i nomi composti, underscore per separare le parti del filename, tutto minuscolo
 
 Esempi:
@@ -211,18 +249,20 @@ Esempi:
 - `generated-images/pixel/weapon_mazza-baseball.png`
 - `generated-images/pixel/object_panchina_1.png` … `object_panchina_5.png`
 - `generated-images/pixel/object_albero_1.png` … `object_albero_5.png`
+- `generated-images/pixel/park_bg_1.png` … `park_bg_5.png`
+- `generated-images/pixel/park_path.png`
 
 ---
 
-## 5. Istruzioni per Claude Code
+## 6. Istruzioni per Claude Code
 
-Quando viene richiesta la generazione di un nuovo asset (personaggio, arma o oggetto):
+Quando viene richiesta la generazione di un nuovo asset (personaggio, arma, oggetto, sfondo parco o sentiero):
 
-1. Identificare se si tratta di un personaggio, un'arma o un oggetto
+1. Identificare la categoria (personaggio / arma / oggetto / sfondo parco / sentiero)
 2. Prendere il prompt base + negative prompt corrispondente da questo file
-3. Se l'asset è già presente nella lista sopra, usare la descrizione già definita (per gli oggetti: generare tutte e 5 le fasi di danno)
+3. Se l'asset è già presente nella lista sopra, usare la descrizione già definita (per gli oggetti: generare tutte e 5 le fasi di danno; per lo sfondo: tutte e 5 le varianti)
 4. Se è un asset nuovo, generare una [DESCRIZIONE SPECIFICA] coerente con lo stile degli esempi esistenti della stessa categoria
 5. Generare l'immagine con lo strumento disponibile (Leonardo AI se configurato, altrimenti il generatore immagini disponibile in sessione) con il prompt completo (base + descrizione specifica [+ fase danno per gli oggetti]) e il negative prompt
 6. Salvare il file generato nella cartella corretta seguendo le convenzioni di naming
-7. Se richiesto, integrare l'asset nel codice del gioco (es. riferimento nello script del personaggio/arma/oggetto)
+7. Se richiesto, integrare l'asset nel codice del gioco (es. riferimento nello script del personaggio/arma/oggetto/sfondo)
 8. Aggiungere la nuova voce a questo file, così lo stile resta documentato e riutilizzabile per le generazioni future

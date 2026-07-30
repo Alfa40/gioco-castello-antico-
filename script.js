@@ -44,6 +44,13 @@ for (const name of Object.keys(OBJECT_TYPES)) {
     SPRITE_SOURCES[`object_${name}_${stage}`] = `generated-images/pixel/object_${name}_${stage}.png`;
   }
 }
+// Park background (5 variants, see Simulation.generateParkLayout's
+// parkBgIndex) and the drive-by path texture — see ART_STYLE.md's
+// "SFONDO PARCO E SENTIERO" section.
+for (let i = 1; i <= 5; i++) {
+  SPRITE_SOURCES[`park_bg_${i}`] = `generated-images/pixel/park_bg_${i}.png`;
+}
+SPRITE_SOURCES.park_path = "generated-images/pixel/park_path.png";
 
 const Sprites = {
   ready: {},
@@ -567,6 +574,8 @@ class Game {
   set zone(v) { this.sim.zone = v; }
   get parkPaths() { return this.sim.parkPaths; }
   set parkPaths(v) { this.sim.parkPaths = v; }
+  get parkBgIndex() { return this.sim.parkBgIndex; }
+  set parkBgIndex(v) { this.sim.parkBgIndex = v; }
   get zoneClearPending() { return this.sim.zoneClearPending; }
   set zoneClearPending(v) { this.sim.zoneClearPending = v; }
 
@@ -693,18 +702,22 @@ class Game {
   // ratio, via a CSS transform — the canvas keeps its native resolution and
   // every pixel-based HUD/panel style stays correct at any screen size.
   //
-  // On a phone/tablet, the canvas is NEVER rotated and the game field must
-  // stay clean: HUD text and touch controls both live outside of it, in
-  // strips above/below (portrait) or panels left/right (landscape) — see the
-  // .portrait-controls / .landscape-controls CSS, which also owns the fixed
-  // pixel size of #game-container for each case (this function just has to
-  // know those same totals to compute a matching scale). A narrow desktop
-  // *browser window* (no touch) keeps the old 90deg-rotate trick instead,
-  // since there's no touch UI to place outside the field there.
+  // On a phone/tablet, HUD text and touch controls always live OUTSIDE the
+  // field, in strips above/below (portrait) or panels left/right
+  // (landscape) — see the .portrait-controls / .landscape-controls CSS,
+  // which also owns the fixed pixel size of #game-container for each case
+  // (this function just has to know those same totals to compute a
+  // matching scale). In portrait specifically, the field itself (canvas
+  // only — HUD/controls are untouched) is rotated 90° and scaled up to
+  // fill the same width the strips use, instead of being squeezed down to
+  // fit a portrait phone's native landscape shape — see
+  // #canvas-rotate-wrap in the CSS. A narrow desktop *browser window* (no
+  // touch) keeps the old whole-container 90deg-rotate trick instead, since
+  // there's no touch UI to place outside the field there.
   setupResponsiveScaling() {
     const container = document.getElementById("game-container");
     // Must match the #game-container width/height in the corresponding CSS class.
-    const PORTRAIT_TOTAL = { w: 960, h: 1210 };
+    const PORTRAIT_TOTAL = { w: 960, h: 2146 };
     const LANDSCAPE_TOTAL = { w: 1740, h: 700 };
     const fit = () => {
       const isTouch = document.documentElement.classList.contains("touch-device");
@@ -1029,6 +1042,7 @@ class Game {
 
     this.zone = state.zone; // lets drawBackground()'s darkness-by-zone logic work unmodified
     this.parkPaths = state.parkPaths || []; // static, so drawBackground()'s path strips just work unmodified too
+    this.parkBgIndex = state.parkBgIndex || 1;
     this.applyGuestUIState();
   }
 
@@ -1670,39 +1684,66 @@ class Game {
     const ctx = this.ctx;
     ctx.clearRect(0, 0, CONFIG.width, CONFIG.height);
 
+    // Park lawn — one of 5 generated variants (see generateParkLayout's
+    // parkBgIndex / ART_STYLE.md), stretched to fill the field. Falls back
+    // to the old flat gradient + grid until the sprite has loaded (or if
+    // it's missing entirely), so there's never a blank frame.
+    const bgSprite = Sprites.get(`park_bg_${this.parkBgIndex}`);
+    if (bgSprite) {
+      ctx.drawImage(bgSprite, 0, 0, CONFIG.width, CONFIG.height);
+    } else {
+      const grd = ctx.createRadialGradient(
+        CONFIG.width / 2, CONFIG.height / 2, 60,
+        CONFIG.width / 2, CONFIG.height / 2, 520
+      );
+      grd.addColorStop(0, "rgba(26, 30, 40, 1)");
+      grd.addColorStop(1, "rgba(6, 7, 10, 1)");
+      ctx.fillStyle = grd;
+      ctx.fillRect(0, 0, CONFIG.width, CONFIG.height);
+
+      ctx.strokeStyle = "rgba(255,255,255,0.03)";
+      ctx.lineWidth = 1;
+      for (let x = 0; x < CONFIG.width; x += 48) {
+        ctx.beginPath(); ctx.moveTo(x, 60); ctx.lineTo(x, CONFIG.height); ctx.stroke();
+      }
+      for (let y = 60; y < CONFIG.height; y += 48) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(CONFIG.width, y); ctx.stroke();
+      }
+    }
+
+    // Park paths: the lanes the drive-by car travels (see
+    // generateParkLayout) — the pavement texture tiled edge-to-edge in
+    // square tiles matching the strip's own height, same load-fallback
+    // idea as the lawn above (a plain lighter strip until it's ready).
+    const pathSprite = Sprites.get("park_path");
+    for (const path of this.parkPaths) {
+      const top = path.y - path.height / 2;
+      if (pathSprite) {
+        for (let x = 0; x < CONFIG.width; x += path.height) {
+          ctx.drawImage(pathSprite, x, top, path.height, path.height);
+        }
+      } else {
+        ctx.fillStyle = "rgba(255,255,255,0.05)";
+        ctx.fillRect(0, top, CONFIG.width, path.height);
+      }
+    }
+
+    // Darkens and red-tints the whole field as zones get deeper — layered
+    // on top of the lawn/path art either way, same atmospheric effect it
+    // always had.
     const darkness = clamp((this.zone - 1) * 0.06, 0, 0.55);
-    const grd = ctx.createRadialGradient(
-      CONFIG.width / 2, CONFIG.height / 2, 60,
-      CONFIG.width / 2, CONFIG.height / 2, 520
-    );
-    grd.addColorStop(0, `rgba(26, 30, 40, ${1 - darkness * 0.3})`);
-    grd.addColorStop(1, `rgba(6, 7, 10, 1)`);
-    ctx.fillStyle = grd;
-    ctx.fillRect(0, 0, CONFIG.width, CONFIG.height);
-
-    // simple ground grid for depth
-    ctx.strokeStyle = "rgba(255,255,255,0.03)";
-    ctx.lineWidth = 1;
-    for (let x = 0; x < CONFIG.width; x += 48) {
-      ctx.beginPath(); ctx.moveTo(x, 60); ctx.lineTo(x, CONFIG.height); ctx.stroke();
-    }
-    for (let y = 60; y < CONFIG.height; y += 48) {
-      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(CONFIG.width, y); ctx.stroke();
-    }
-
-    // red tint overlay as zones get deeper
     if (darkness > 0) {
+      const vignette = ctx.createRadialGradient(
+        CONFIG.width / 2, CONFIG.height / 2, 60,
+        CONFIG.width / 2, CONFIG.height / 2, 520
+      );
+      vignette.addColorStop(0, "rgba(6, 7, 10, 0)");
+      vignette.addColorStop(1, `rgba(6, 7, 10, ${darkness * 0.6})`);
+      ctx.fillStyle = vignette;
+      ctx.fillRect(0, 0, CONFIG.width, CONFIG.height);
+
       ctx.fillStyle = `rgba(120, 20, 30, ${darkness * 0.12})`;
       ctx.fillRect(0, 0, CONFIG.width, CONFIG.height);
-    }
-
-    // Park paths: the lanes the drive-by car travels (see generateParkLayout)
-    // — drawn as a plain lighter strip since there's no dedicated ground
-    // texture asset, just enough to visually read as "the path" versus the
-    // grass the rest of the obstacles sit on.
-    for (const path of this.parkPaths) {
-      ctx.fillStyle = "rgba(255,255,255,0.05)";
-      ctx.fillRect(0, path.y - path.height / 2, CONFIG.width, path.height);
     }
   }
 
