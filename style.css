@@ -50,6 +50,12 @@ html, body {
   background: var(--bg-dark);
 }
 
+/* Only meaningful in portrait-controls (see further down): elsewhere it's
+   transparent to layout so the canvas positions exactly as if this wrapper
+   didn't exist at all (its per-mode top/left rules keep resolving against
+   #game-container itself, unchanged). */
+#canvas-rotate-wrap { display: contents; }
+
 canvas {
   display: block;
   background: radial-gradient(ellipse at center, #171a22 0%, #0b0d12 75%);
@@ -176,6 +182,12 @@ html.touch-device #upgrade-screen .panel {
   max-width: 100%;
   max-height: 100%;
   border-radius: 0;
+  /* The panel goes edge-to-edge on touch (see above), so its own title
+     would otherwise sit right under the phone's status bar (clock/battery)
+     — env(safe-area-inset-top) is the actual notch/status-bar height on
+     devices that report one (0 elsewhere), added on top of the normal
+     padding rather than replacing it. */
+  padding-top: calc(28px + env(safe-area-inset-top, 0px));
 }
 html.touch-device #upgrade-screen .section-title { font-size: 14px; }
 html.touch-device #upgrade-screen .upgrade-card h3 { font-size: 16px; }
@@ -482,17 +494,35 @@ html.touch-device #touch-controls { display: block; }
 /* Phone/tablet held upright (see setupResponsiveScaling): the game field
    must stay clean, so both the HUD text and the touch controls move outside
    of it — HUD in a strip ABOVE the canvas, controls in a strip BELOW —
-   instead of overlaying the canvas. #game-container is sized to
-   HUD_STRIP_HEIGHT + 600 + CONTROL_STRIP_HEIGHT to make room for both. */
-html.touch-device.portrait-controls #game-container { width: 960px; height: 1210px; }
-html.touch-device.portrait-controls canvas { position: absolute; top: 110px; left: 0; }
+   instead of overlaying the canvas. The field itself is the native 960x600
+   landscape simulation (see CONFIG in simulation.js — nothing about the
+   game world's own coordinates changes), just rotated 90° and scaled up
+   1.6x (960/600) so its rotated footprint exactly fills the same 960px
+   width the HUD/control strips already use, instead of being squeezed
+   down to fit a portrait phone's narrower width unrotated. #game-container
+   is sized to HUD_STRIP_HEIGHT + rotated-field-height (960 * 1.6 = 1536) +
+   CONTROL_STRIP_HEIGHT to make room for all three. */
+html.touch-device.portrait-controls #game-container { width: 960px; height: 2146px; }
+html.touch-device.portrait-controls #canvas-rotate-wrap {
+  display: block;
+  position: absolute;
+  top: 110px; left: 0;
+  width: 960px; height: 1536px;
+}
+html.touch-device.portrait-controls #canvas-rotate-wrap canvas {
+  position: absolute;
+  top: 50%; left: 50%;
+  width: 960px; height: 600px;
+  transform: translate(-50%, -50%) rotate(90deg) scale(1.6);
+  transform-origin: center center;
+}
 html.touch-device.portrait-controls #hud {
   top: 0; height: 110px;
   background: rgba(255, 255, 255, 0.03);
   border-bottom: 1px solid var(--panel-border);
 }
 html.touch-device.portrait-controls #touch-controls {
-  top: 710px;
+  top: 1646px;
   height: 500px;
   background: rgba(255, 255, 255, 0.03);
   border-top: 1px solid var(--panel-border);
@@ -519,7 +549,12 @@ html.touch-device.landscape-controls #hud {
   justify-content: flex-start;
   align-items: center;
   gap: 18px;
-  padding: 36px 16px 0;
+  /* Held sideways, a phone's status bar (clock/battery) can end up running
+     along this same left edge depending on which way it was rotated —
+     env(safe-area-inset-left) is that real inset when there is one (0
+     otherwise), nudging the HUD text in from under it without affecting
+     phones/orientations where there's nothing to avoid. */
+  padding: 36px 16px 0 calc(16px + env(safe-area-inset-left, 0px));
   background: rgba(255, 255, 255, 0.03);
   border-right: 1px solid var(--panel-border);
 }
@@ -536,7 +571,7 @@ html.touch-device.landscape-controls #touch-controls {
   height: 700px;
 }
 html.touch-device.landscape-controls .joystick-base {
-  left: 20px; bottom: 40px; top: auto; right: auto;
+  left: calc(20px + env(safe-area-inset-left, 0px)); bottom: 40px; top: auto; right: auto;
 }
 html.touch-device.landscape-controls .aim-stick-base {
   right: 110px; bottom: 40px; top: auto; left: auto;

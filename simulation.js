@@ -52,7 +52,7 @@ const CONFIG = {
     attackCooldown: 1.15,
     detectRange: 520,
     radius: 14,
-    baseMoneyDrop: [20, 36], // doubled from [10, 18]
+    baseMoneyDrop: [10, 18], // halved back down from [20, 36]
   },
 
   // Pickups dropped by defeated enemies — the run has no progress carried
@@ -778,6 +778,7 @@ class Player {
     this.y = y;
     this.facing = -Math.PI / 2;
     this.aimAngle = this.facing;
+    this.aimActive = false; // see update()/autoFireRanged
     this.radius = CONFIG.player.radius;
 
     this.attackCooldownTimer = 0;
@@ -941,8 +942,12 @@ class Player {
     this.fireRanged(sim, angle);
   }
 
+  // Hands-free auto-fire only while the aim stick (touch) / right stick
+  // (gamepad) is actively held — see this.aimActive in update(). Without
+  // it, walking toward an enemy with a gun equipped would otherwise fire
+  // on its own just because facing happens to line up with them.
   autoFireRanged(sim) {
-    if (!this.ranged || this.rangedCooldownTimer > 0 || this.ammo <= 0) return;
+    if (!this.aimActive || !this.ranged || this.rangedCooldownTimer > 0 || this.ammo <= 0) return;
     const angle = sim.findAutoFireAngle(this.x, this.y, this.aimAngle, this.ranged.aimConeBonus);
     if (angle === null) return;
     this.fireRanged(sim, angle);
@@ -1017,6 +1022,12 @@ class Player {
 
     const stickAim = input.gpAim || input.touchAim;
     this.aimAngle = stickAim ? Math.atan2(stickAim.y, stickAim.x) : this.facing;
+    // Auto-fire (see autoFireRanged) only kicks in while this — the aim
+    // stick (touch) / right stick (gamepad) — is actually being held, not
+    // just whenever the aim happens to be pointing at an enemy because
+    // that's the direction you're walking. Manual fire (F key / R2
+    // trigger, see tryRangedAttack) is unaffected either way.
+    this.aimActive = !!stickAim;
 
     if (this.dashTimer > 0) {
       this.dashTimer -= dt;
@@ -1446,6 +1457,10 @@ class Simulation {
     this.bombs = [];
     this.parkPaths = [];
     this.parkObjects = [];
+    // Which of the 5 park background variants (see ART_STYLE.md) is showing
+    // — picked fresh in generateParkLayout(), synced to guests via
+    // toSnapshot() same as parkPaths/parkObjects.
+    this.parkBgIndex = 1;
     this.floatingTexts = [];
 
     this.zone = 1;
@@ -1549,11 +1564,18 @@ class Simulation {
     const margin = 36;
     const minGap = 46;
 
+    // Same zone-based HP curve enemies use (see enemyStatsForZone) — an
+    // object encountered deep into a run takes progressively more hits to
+    // break, instead of always dying in the same handful of swings no
+    // matter how far the player has gone.
+    const hpMult = 1 + CONFIG.zoneScaling.hpPerZone * (this.zone - 1);
+
     const overlapsExisting = (x, y, radius) =>
       objects.some(o => dist(x, y, o.x, o.y) < o.radius + radius + minGap);
 
     const place = (typeKey, count, alongPath) => {
       const type = OBJECT_TYPES[typeKey];
+      const hp = Math.round(type.hp * hpMult);
       let placed = 0, attempts = 0;
       while (placed < count && attempts < 300) {
         attempts++;
@@ -1570,21 +1592,26 @@ class Simulation {
           if (onAnyPath(y)) continue;
         }
         if (overlapsExisting(x, y, type.radius)) continue;
-        objects.push({ id: nextEntityId(), x, y, typeKey, radius: type.radius, hp: type.hp, maxHp: type.hp });
+        objects.push({ id: nextEntityId(), x, y, typeKey, radius: type.radius, hp, maxHp: hp });
         placed++;
       }
     };
 
-    place("panchina", pathCount * 2, true);
-    if (Math.floor((this.zone - 1) / 10) % 2 === 0) place("lampione", pathCount * 2, true);
-    place("albero", 7, false);
-    place("cestino", 4, false);
-    place("cassonetto", 3, false);
-    place("barile", 3, false);
-    place("recinzione", 4, false);
+    // Fewer objects scattered around the field than before, so the park
+    // reads as furnished rather than cluttered.
+    place("panchina", pathCount, true);
+    if (Math.floor((this.zone - 1) / 10) % 2 === 0) place("lampione", pathCount, true);
+    place("albero", 4, false);
+    place("cestino", 2, false);
+    place("cassonetto", 2, false);
+    place("barile", 2, false);
+    place("recinzione", 2, false);
 
     this.parkPaths = paths;
     this.parkObjects = objects;
+    // A fresh look each regeneration (every 10 zones) — see ART_STYLE.md's
+    // 5 park background variants.
+    this.parkBgIndex = randInt(1, 5);
   }
 
   damageParkObject(obj, amount) {
@@ -2258,6 +2285,7 @@ class Simulation {
       })),
       pickups: this.pickups.map(p => ({ id: p.id, x: p.x, y: p.y, kind: p.kind, life: p.life })),
       parkPaths: this.parkPaths,
+      parkBgIndex: this.parkBgIndex,
       parkObjects: this.parkObjects.filter(o => o.hp > 0).map(o => ({
         id: o.id, x: o.x, y: o.y, typeKey: o.typeKey, radius: o.radius, hp: o.hp, maxHp: o.maxHp,
       })),
