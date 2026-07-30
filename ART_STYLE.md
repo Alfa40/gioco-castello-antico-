@@ -134,29 +134,95 @@ two hands gripping a large rocket launcher tube (one on the front grip, one on t
 
 ---
 
-## 3. Convenzioni di naming file
+## 3. OGGETTI (parco)
 
-- Personaggi: `assets/characters/[nome-personaggio].png`
-- Armi: `assets/weapons/[nome-arma].png`
-- Usare sempre trattini (`-`) al posto di spazi, tutto minuscolo
+Oggetti d'ambiente sparsi nel campo di gioco (ora sempre ambientato in un parco): fanno da ostacolo fisico finché non vengono distrutti a forza di colpirli. Ogni oggetto ha **5 immagini**, una per fase di danno — dalla condizione intatta a quella prossima alla distruzione — selezionate a runtime in base alla vita residua dell'oggetto.
 
-Esempi:
-- `assets/characters/criminale.png`
-- `assets/characters/tossicodipendente.png`
-- `assets/weapons/mazza-baseball.png`
-- `assets/weapons/lanciarazzi.png`
+A differenza di personaggi e armi, un oggetto non è mai impugnato né mostra mani/braccia: è ripreso da solo, isolato, visto dall'alto.
+
+### Prompt base (oggetti)
+```
+Top-down pixel art game environmental object/prop viewed from directly above (bird's-eye view, camera perfectly perpendicular to the ground), 32-bit retro pixel art style, [DESCRIZIONE SPECIFICA], [FASE DANNO], object centered in frame, isolated on solid black background, no hands, no arms, no people visible, clean pixel edges, limited color palette, soft ambient shading, consistent pixel art game style matching other object sprites, game asset sprite, high detail pixel work, square aspect ratio 1:1
+```
+
+### Negative prompt (oggetti)
+```
+face, eyes, hands, arms, fingers, people, characters, front view, side view, background details, scenery, blurry, photorealistic, 3D render, low quality, watermark, text, signature
+```
+
+### Fasi di danno ([FASE DANNO])
+
+Da inserire nel prompt insieme alla descrizione specifica dell'oggetto, così ogni oggetto ha la sua sequenza di 5 immagini via via più rovinate:
+
+1. **Intatto:** `in pristine, undamaged condition, clean and intact`
+2. **Leggero danno:** `with minor scuffs, small scratches and light dirt, slightly worn but mostly intact`
+3. **Danneggiato:** `visibly damaged with dents, scratches and rust spots, starting to look beaten down`
+4. **Molto danneggiato:** `heavily damaged, large dents, cracks and rust, parts bent or broken, close to falling apart`
+5. **Quasi distrutto:** `nearly destroyed, crumbling wreck, broken and battered almost beyond recognition, barely holding together`
+
+### Elenco oggetti definiti ([DESCRIZIONE SPECIFICA])
+
+**Cestino della spazzatura:**
+```
+a park trash bin, metal mesh or perforated body, small round opening on top, mounted on a short post
+```
+
+**Panchina:**
+```
+a park bench, wooden slats on a metal frame, viewed from directly above showing the seat and backrest
+```
+
+**Cassonetto:**
+```
+a large plastic garbage dumpster with wheels, hinged flat lid on top, municipal waste bin
+```
+
+**Barile:**
+```
+a metal oil drum/barrel standing upright, cylindrical shape with visible rim ridges, industrial look
+```
+
+**Recinzione di legno:**
+```
+a short section of wooden picket fence, vertical wooden slats connected by horizontal rails
+```
+
+**Albero:**
+```
+a park tree seen from directly above, round leafy canopy, trunk barely visible at the very center
+```
+
+**Lampione:**
+```
+a park street lamp post seen from directly above, circular light fixture at the top, thin pole barely visible at the center
+```
 
 ---
 
-## 4. Istruzioni per Claude Code
+## 4. Convenzioni di naming file
 
-Quando viene richiesta la generazione di un nuovo asset (personaggio o arma):
+- Personaggi: `generated-images/pixel/[nome-personaggio].png`
+- Armi: `generated-images/pixel/weapon_[nome-arma].png`
+- Oggetti: `generated-images/pixel/object_[nome-oggetto]_[fase 1-5].png`
+- Usare sempre trattini (`-`) per i nomi composti, underscore per separare le parti del filename, tutto minuscolo
 
-1. Identificare se si tratta di un personaggio o di un'arma
+Esempi:
+- `generated-images/pixel/enemy_tossicodipendente.png`
+- `generated-images/pixel/weapon_mazza-baseball.png`
+- `generated-images/pixel/object_panchina_1.png` … `object_panchina_5.png`
+- `generated-images/pixel/object_albero_1.png` … `object_albero_5.png`
+
+---
+
+## 5. Istruzioni per Claude Code
+
+Quando viene richiesta la generazione di un nuovo asset (personaggio, arma o oggetto):
+
+1. Identificare se si tratta di un personaggio, un'arma o un oggetto
 2. Prendere il prompt base + negative prompt corrispondente da questo file
-3. Se l'asset è già presente nella lista sopra, usare la descrizione già definita
-4. Se è un asset nuovo, generare una [DESCRIZIONE SPECIFICA] coerente con lo stile degli esempi esistenti (stessa struttura: acconciatura/dettaglio distintivo + abbigliamento + oggetti in mano)
-5. Chiamare il tool MCP di Leonardo AI con il prompt completo (base + descrizione specifica) e il negative prompt
+3. Se l'asset è già presente nella lista sopra, usare la descrizione già definita (per gli oggetti: generare tutte e 5 le fasi di danno)
+4. Se è un asset nuovo, generare una [DESCRIZIONE SPECIFICA] coerente con lo stile degli esempi esistenti della stessa categoria
+5. Generare l'immagine con lo strumento disponibile (Leonardo AI se configurato, altrimenti il generatore immagini disponibile in sessione) con il prompt completo (base + descrizione specifica [+ fase danno per gli oggetti]) e il negative prompt
 6. Salvare il file generato nella cartella corretta seguendo le convenzioni di naming
-7. Se richiesto, integrare l'asset nel codice del gioco (es. riferimento nello script del personaggio/arma)
+7. Se richiesto, integrare l'asset nel codice del gioco (es. riferimento nello script del personaggio/arma/oggetto)
 8. Aggiungere la nuova voce a questo file, così lo stile resta documentato e riutilizzabile per le generazioni future

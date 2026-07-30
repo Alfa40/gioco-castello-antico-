@@ -4,12 +4,13 @@
 // thing that invalidates the old cache and lets players pick up the new
 // version (see the fetch handler below for how updates actually reach an
 // already-installed app).
-const CACHE_VERSION = "crazy-town-v1";
+const CACHE_VERSION = "crazy-town-v2";
 
 const ASSETS = [
   "./",
   "./index.html",
   "./style.css",
+  "./simulation.js",
   "./script.js",
   "./manifest.json",
   "./icons/icon-192.png",
