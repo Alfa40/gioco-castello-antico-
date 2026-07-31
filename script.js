@@ -721,7 +721,7 @@ class Game {
   setupResponsiveScaling() {
     const container = document.getElementById("game-container");
     // Must match the #game-container width/height in the corresponding CSS class.
-    const PORTRAIT_TOTAL = { w: 960, h: 1966 };
+    const PORTRAIT_TOTAL = { w: 960, h: 1916 };
     const LANDSCAPE_TOTAL = { w: 1740, h: 700 };
 
     // env(safe-area-inset-*) is CSS-only — there's no JS API for the real
@@ -734,11 +734,15 @@ class Game {
     // reads the true value once per fit() and compensates at the container
     // level instead (see below), in real, unscaled pixels.
     const insetProbe = document.createElement("div");
-    insetProbe.style.cssText = "position:fixed; top:0; left:0; width:0; height:0; visibility:hidden; pointer-events:none; padding:env(safe-area-inset-top,0px) 0 0 env(safe-area-inset-left,0px);";
+    insetProbe.style.cssText = "position:fixed; top:0; left:0; width:0; height:0; visibility:hidden; pointer-events:none; padding:env(safe-area-inset-top,0px) 0 env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px);";
     document.body.appendChild(insetProbe);
     const readInset = () => {
       const cs = getComputedStyle(insetProbe);
-      return { top: parseFloat(cs.paddingTop) || 0, left: parseFloat(cs.paddingLeft) || 0 };
+      return {
+        top: parseFloat(cs.paddingTop) || 0,
+        left: parseFloat(cs.paddingLeft) || 0,
+        bottom: parseFloat(cs.paddingBottom) || 0,
+      };
     };
 
     const fit = () => {
@@ -765,9 +769,19 @@ class Game {
           // Fill the full device width exactly, edge to edge — no safety
           // margin. PORTRAIT_TOTAL's height (see above) is deliberately
           // sized close to a real phone's proportions at this scale (see
-          // style.css's portrait touch-controls comment) so this doesn't
-          // overflow top/bottom on typical phones.
-          const scale = window.innerWidth / total.w;
+          // style.css's portrait touch-controls comment), clearing both the
+          // status bar/notch (inset.top) AND the home-indicator bar on
+          // notched iPhones (inset.bottom) — on a real device without a
+          // touch-controls cutoff bug, that static budget alone is already
+          // enough. As a last-resort safety net for any device whose real
+          // insets turn out bigger than that budget assumed, clamp the
+          // scale down just enough to keep the whole container on-screen —
+          // trading a sliver of width match (still far better than before)
+          // for the controls never being cut off below the fold, which
+          // matters more.
+          let scale = window.innerWidth / total.w;
+          const overflow = inset.top + total.h * scale + inset.bottom - window.innerHeight;
+          if (overflow > 0) scale = (window.innerHeight - inset.top - inset.bottom) / total.h;
           container.style.transform = `translate(0px, ${inset.top}px) scale(${scale})`;
         } else {
           // Landscape: unchanged fit-both-dimensions behavior, no notch
