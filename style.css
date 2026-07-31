@@ -504,7 +504,7 @@ html.touch-device #touch-controls { display: block; }
    down to fit a portrait phone's narrower width unrotated. #game-container
    is sized to HUD_STRIP_HEIGHT + rotated-field-height (960 * 1.6 = 1536) +
    CONTROL_STRIP_HEIGHT to make room for all three. */
-html.touch-device.portrait-controls #game-container { width: 960px; height: 1966px; }
+html.touch-device.portrait-controls #game-container { width: 960px; height: 1916px; }
 html.touch-device.portrait-controls #canvas-rotate-wrap {
   display: block;
   position: absolute;
@@ -530,38 +530,42 @@ html.touch-device.portrait-controls #hud {
 }
 html.touch-device.portrait-controls #touch-controls {
   top: 1616px;
-  height: 350px;
+  height: 300px;
   background: rgba(255, 255, 255, 0.03);
   border-top: 1px solid var(--panel-border);
 }
 /* The field now fills the device width exactly (see setupResponsiveScaling),
    which on most phones means less spare vertical room than before — this
-   whole strip and everything in it below is scaled to ~70% of its
+   whole strip and everything in it below is scaled to 60% of its
    landscape-mode size (still comfortably tappable, see the 2x note further
    down) so the layout's overall proportions land close to a real phone's
-   instead of overflowing top/bottom. Landscape is untouched: none of these
+   instead of overflowing top/bottom — including clearing the home-indicator
+   bar at the very bottom on notched iPhones, not just the status bar at the
+   top (setupResponsiveScaling() also clamps the scale further at runtime as
+   a last-resort safety net, in case some device's insets are still bigger
+   than this static budget assumes). Landscape is untouched: none of these
    selectors match there, so it keeps the original, larger control sizes. */
 html.touch-device.portrait-controls .joystick-base,
 html.touch-device.portrait-controls .aim-stick-base {
-  width: 182px; height: 182px; bottom: 50px;
+  width: 156px; height: 156px; bottom: 43px;
 }
-html.touch-device.portrait-controls .joystick-base { left: 28px; }
-html.touch-device.portrait-controls .aim-stick-base { right: 28px; }
+html.touch-device.portrait-controls .joystick-base { left: 24px; }
+html.touch-device.portrait-controls .aim-stick-base { right: 24px; }
 html.touch-device.portrait-controls .joystick-knob,
 html.touch-device.portrait-controls .aim-stick-knob {
-  width: 78px; height: 78px; margin-left: -39px; margin-top: -39px;
+  width: 67px; height: 67px; margin-left: -34px; margin-top: -34px;
 }
 html.touch-device.portrait-controls #touch-action-cluster {
-  left: 259px; top: 84px; width: 154px; height: 182px;
+  left: 222px; top: 72px; width: 132px; height: 156px;
 }
-html.touch-device.portrait-controls .touch-btn-medium { width: 92px; height: 92px; font-size: 36px; top: 7px; }
-html.touch-device.portrait-controls #touch-dash { left: 31px; }
-html.touch-device.portrait-controls .touch-btn-small { width: 73px; height: 73px; font-size: 31px; top: 111px; }
-html.touch-device.portrait-controls #touch-bomb-throw { left: 8px; }
-html.touch-device.portrait-controls .touch-btn-tiny { width: 53px; height: 53px; font-size: 22px; top: 111px; }
-html.touch-device.portrait-controls #touch-bomb-select { left: 92px; }
+html.touch-device.portrait-controls .touch-btn-medium { width: 79px; height: 79px; font-size: 31px; top: 6px; }
+html.touch-device.portrait-controls #touch-dash { left: 26px; }
+html.touch-device.portrait-controls .touch-btn-small { width: 62px; height: 62px; font-size: 26px; top: 95px; }
+html.touch-device.portrait-controls #touch-bomb-throw { left: 7px; }
+html.touch-device.portrait-controls .touch-btn-tiny { width: 46px; height: 46px; font-size: 19px; top: 95px; }
+html.touch-device.portrait-controls #touch-bomb-select { left: 79px; }
 html.touch-device.portrait-controls .touch-btn-pause {
-  top: 17px; width: 56px; height: 56px; font-size: 22px; margin-left: -28px;
+  top: 14px; width: 48px; height: 48px; font-size: 19px; margin-left: -24px;
 }
 
 /* Phone/tablet held sideways: HUD text + the movement joystick share a panel
@@ -577,7 +581,14 @@ html.touch-device.portrait-controls .touch-btn-pause {
    + action buttons) without overlap; canvas and HUD are vertically centered
    within that taller height. */
 html.touch-device.landscape-controls #game-container { width: 1740px; height: 700px; }
-html.touch-device.landscape-controls canvas { position: absolute; top: 50px; left: 300px; }
+/* left:300 would butt the field right up against the HUD/joystick panel
+   (which is exactly 300px wide) while dumping all the leftover space on the
+   right, past the field, before the floating aim-stick/action buttons/pause
+   — visually lopsided. The aim-stick (right:110px, 260px wide) is the
+   leftmost of those floating controls, at x=1370; centering the 960-wide
+   field between the HUD panel's right edge (300) and that boundary (1370)
+   gives an equal ~55px gap on both sides instead. */
+html.touch-device.landscape-controls canvas { position: absolute; top: 50px; left: 355px; }
 html.touch-device.landscape-controls #hud {
   top: 0; left: 0; right: auto; bottom: auto;
   width: 300px; height: 700px;
