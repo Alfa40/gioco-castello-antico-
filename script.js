@@ -723,6 +723,24 @@ class Game {
     // Must match the #game-container width/height in the corresponding CSS class.
     const PORTRAIT_TOTAL = { w: 960, h: 2146 };
     const LANDSCAPE_TOTAL = { w: 1740, h: 700 };
+
+    // env(safe-area-inset-*) is CSS-only — there's no JS API for the real
+    // notch/status-bar size — so a hidden probe element with padding driven
+    // by env() lets getComputedStyle read back the actual device pixel
+    // value. Needed because #game-container itself gets scaled down below:
+    // an env()-based padding placed INSIDE it (as CSS) would only end up
+    // `inset * scale` real pixels once rendered, not the real inset —
+    // nowhere near enough clearance on an actual notch/Dynamic Island. This
+    // reads the true value once per fit() and compensates at the container
+    // level instead (see below), in real, unscaled pixels.
+    const insetProbe = document.createElement("div");
+    insetProbe.style.cssText = "position:fixed; top:0; left:0; width:0; height:0; visibility:hidden; pointer-events:none; padding:env(safe-area-inset-top,0px) 0 0 env(safe-area-inset-left,0px);";
+    document.body.appendChild(insetProbe);
+    const readInset = () => {
+      const cs = getComputedStyle(insetProbe);
+      return { top: parseFloat(cs.paddingTop) || 0, left: parseFloat(cs.paddingLeft) || 0 };
+    };
+
     const fit = () => {
       const isTouch = document.documentElement.classList.contains("touch-device");
       const portrait = window.innerHeight > window.innerWidth;
@@ -736,8 +754,21 @@ class Game {
         // raw drag input back into the field's own (unrotated) coordinate space.
         this.portraitRotated = portrait;
         const total = portrait ? PORTRAIT_TOTAL : LANDSCAPE_TOTAL;
-        const scale = Math.min(window.innerWidth / total.w, window.innerHeight / total.h);
-        container.style.transform = `scale(${scale})`;
+        const inset = readInset();
+        // Portrait: status bar/notch runs along the top. Landscape: the
+        // phone's physical top edge (same status bar) ends up along the
+        // container's LEFT edge instead (see the existing #hud/joystick
+        // left-inset handling for that mode). Shrink the space we scale
+        // into by the real inset, then shift the whole scaled container by
+        // that same real amount so the HUD/field/controls all clear it
+        // together, uniformly, with nothing left underneath.
+        const shiftTop = portrait ? inset.top : 0;
+        const shiftLeft = portrait ? 0 : inset.left;
+        const scale = Math.min(
+          (window.innerWidth - shiftLeft) / total.w,
+          (window.innerHeight - shiftTop) / total.h
+        );
+        container.style.transform = `translate(${shiftLeft}px, ${shiftTop}px) scale(${scale})`;
       } else {
         this.portraitRotated = portrait; // desktop-window-narrow fallback only (no touch UI involved)
         const scale = portrait

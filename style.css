@@ -520,11 +520,11 @@ html.touch-device.portrait-controls #canvas-rotate-wrap canvas {
 }
 html.touch-device.portrait-controls #hud {
   top: 0; height: 110px;
-  /* Same reasoning as the shop panel/joystick fixes: env(safe-area-inset-top)
-     is the real notch/status-bar height when there is one (0 otherwise), so
-     the HP bar clears the phone's clock/battery bar instead of sitting
-     under it. */
-  padding-top: calc(10px + env(safe-area-inset-top, 0px));
+  /* The real notch/status-bar clearance is handled at the container level
+     in setupResponsiveScaling() (see the insetProbe/shiftTop comment there)
+     — env() applied here would only end up `inset * scale` real pixels once
+     rendered (the container itself is scaled down), nowhere near enough. */
+  padding-top: 10px;
   background: rgba(255, 255, 255, 0.03);
   border-bottom: 1px solid var(--panel-border);
 }
@@ -557,11 +557,12 @@ html.touch-device.landscape-controls #hud {
   align-items: center;
   gap: 18px;
   /* Held sideways, a phone's status bar (clock/battery) can end up running
-     along this same left edge depending on which way it was rotated —
-     env(safe-area-inset-left) is that real inset when there is one (0
-     otherwise), nudging the HUD text in from under it without affecting
-     phones/orientations where there's nothing to avoid. */
-  padding: 36px 16px 0 calc(16px + env(safe-area-inset-left, 0px));
+     along this same left edge depending on which way it was rotated — the
+     real clearance for that is handled at the container level in
+     setupResponsiveScaling() (see the insetProbe/shiftLeft comment there),
+     not here: env() applied inside this scaled container would only end up
+     `inset * scale` real pixels once rendered, nowhere near enough. */
+  padding: 36px 16px 0 16px;
   background: rgba(255, 255, 255, 0.03);
   border-right: 1px solid var(--panel-border);
 }
@@ -578,7 +579,7 @@ html.touch-device.landscape-controls #touch-controls {
   height: 700px;
 }
 html.touch-device.landscape-controls .joystick-base {
-  left: calc(20px + env(safe-area-inset-left, 0px)); bottom: 40px; top: auto; right: auto;
+  left: 20px; bottom: 40px; top: auto; right: auto;
 }
 html.touch-device.landscape-controls .aim-stick-base {
   right: 110px; bottom: 40px; top: auto; left: auto;
