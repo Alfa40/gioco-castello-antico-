@@ -504,11 +504,11 @@ html.touch-device #touch-controls { display: block; }
    down to fit a portrait phone's narrower width unrotated. #game-container
    is sized to HUD_STRIP_HEIGHT + rotated-field-height (960 * 1.6 = 1536) +
    CONTROL_STRIP_HEIGHT to make room for all three. */
-html.touch-device.portrait-controls #game-container { width: 960px; height: 2146px; }
+html.touch-device.portrait-controls #game-container { width: 960px; height: 1966px; }
 html.touch-device.portrait-controls #canvas-rotate-wrap {
   display: block;
   position: absolute;
-  top: 110px; left: 0;
+  top: 80px; left: 0;
   width: 960px; height: 1536px;
 }
 html.touch-device.portrait-controls #canvas-rotate-wrap canvas {
@@ -519,7 +519,7 @@ html.touch-device.portrait-controls #canvas-rotate-wrap canvas {
   transform-origin: center center;
 }
 html.touch-device.portrait-controls #hud {
-  top: 0; height: 110px;
+  top: 0; height: 80px;
   /* The real notch/status-bar clearance is handled at the container level
      in setupResponsiveScaling() (see the insetProbe/shiftTop comment there)
      — env() applied here would only end up `inset * scale` real pixels once
@@ -529,10 +529,39 @@ html.touch-device.portrait-controls #hud {
   border-bottom: 1px solid var(--panel-border);
 }
 html.touch-device.portrait-controls #touch-controls {
-  top: 1646px;
-  height: 500px;
+  top: 1616px;
+  height: 350px;
   background: rgba(255, 255, 255, 0.03);
   border-top: 1px solid var(--panel-border);
+}
+/* The field now fills the device width exactly (see setupResponsiveScaling),
+   which on most phones means less spare vertical room than before — this
+   whole strip and everything in it below is scaled to ~70% of its
+   landscape-mode size (still comfortably tappable, see the 2x note further
+   down) so the layout's overall proportions land close to a real phone's
+   instead of overflowing top/bottom. Landscape is untouched: none of these
+   selectors match there, so it keeps the original, larger control sizes. */
+html.touch-device.portrait-controls .joystick-base,
+html.touch-device.portrait-controls .aim-stick-base {
+  width: 182px; height: 182px; bottom: 50px;
+}
+html.touch-device.portrait-controls .joystick-base { left: 28px; }
+html.touch-device.portrait-controls .aim-stick-base { right: 28px; }
+html.touch-device.portrait-controls .joystick-knob,
+html.touch-device.portrait-controls .aim-stick-knob {
+  width: 78px; height: 78px; margin-left: -39px; margin-top: -39px;
+}
+html.touch-device.portrait-controls #touch-action-cluster {
+  left: 259px; top: 84px; width: 154px; height: 182px;
+}
+html.touch-device.portrait-controls .touch-btn-medium { width: 92px; height: 92px; font-size: 36px; top: 7px; }
+html.touch-device.portrait-controls #touch-dash { left: 31px; }
+html.touch-device.portrait-controls .touch-btn-small { width: 73px; height: 73px; font-size: 31px; top: 111px; }
+html.touch-device.portrait-controls #touch-bomb-throw { left: 8px; }
+html.touch-device.portrait-controls .touch-btn-tiny { width: 53px; height: 53px; font-size: 22px; top: 111px; }
+html.touch-device.portrait-controls #touch-bomb-select { left: 92px; }
+html.touch-device.portrait-controls .touch-btn-pause {
+  top: 17px; width: 56px; height: 56px; font-size: 22px; margin-left: -28px;
 }
 
 /* Phone/tablet held sideways: HUD text + the movement joystick share a panel
