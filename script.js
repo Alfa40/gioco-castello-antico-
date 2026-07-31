@@ -754,26 +754,29 @@ class Game {
         // raw drag input back into the field's own (unrotated) coordinate space.
         this.portraitRotated = portrait;
         const total = portrait ? PORTRAIT_TOTAL : LANDSCAPE_TOTAL;
-        const inset = readInset();
-        // Portrait: status bar/notch runs along the top. Landscape: the
-        // phone's physical top edge (same status bar) ends up along the
-        // container's LEFT edge instead (see the existing #hud/joystick
-        // left-inset handling for that mode). Shrink the space we scale
-        // into by the real inset, then shift the whole scaled container by
-        // that same real amount so the HUD/field/controls all clear it
-        // together, uniformly, with nothing left underneath.
-        const shiftTop = portrait ? inset.top : 0;
-        const shiftLeft = portrait ? 0 : inset.left;
-        // Portrait scales to fill the full device width (PORTRAIT_TOTAL's
-        // aspect ratio is already close to a typical phone's, so this only
-        // ever needs a modest zoom) so the field's left/right edges always
-        // reach the screen edges, rather than fitting-with-letterboxing on
-        // whichever dimension has slack — landscape keeps the old fit-both
-        // behavior since matching width there isn't what was asked for.
-        const scale = portrait
-          ? (window.innerWidth - shiftLeft) / total.w
-          : Math.min((window.innerWidth - shiftLeft) / total.w, (window.innerHeight - shiftTop) / total.h);
-        container.style.transform = `translate(${shiftLeft}px, ${shiftTop}px) scale(${scale})`;
+        if (portrait) {
+          // Real notch/status-bar clearance: env() can't be read directly in
+          // JS, so insetProbe's computed padding reports the actual device
+          // pixel value (see its own comment above). Shrink the space we
+          // scale into by that amount, then shift the whole scaled
+          // container down by that same real amount so nothing ends up
+          // underneath it.
+          const inset = readInset();
+          // Fill (almost) the full device width — PORTRAIT_TOTAL's aspect
+          // ratio is already close to a typical phone's, so a small 0.97
+          // safety factor is enough to keep the bottom/top edges from
+          // slightly overflowing the viewport on most phones, while the
+          // field still reaches essentially edge to edge (a couple of
+          // pixels of margin at most either side).
+          const scale = ((window.innerWidth - 0) / total.w) * 0.97;
+          container.style.transform = `translate(0px, ${inset.top}px) scale(${scale})`;
+        } else {
+          // Landscape: unchanged fit-both-dimensions behavior, no notch
+          // compensation here (that's still handled by the #hud/joystick
+          // env(safe-area-inset-left) padding in style.css, same as before).
+          const scale = Math.min(window.innerWidth / total.w, window.innerHeight / total.h);
+          container.style.transform = `scale(${scale})`;
+        }
       } else {
         this.portraitRotated = portrait; // desktop-window-narrow fallback only (no touch UI involved)
         const scale = portrait
