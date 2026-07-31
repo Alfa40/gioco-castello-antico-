@@ -152,13 +152,17 @@ face, eyes, hands, arms, fingers, people, characters, front view, side view, bac
 
 ### Fasi di danno ([FASE DANNO])
 
-Da inserire nel prompt insieme alla descrizione specifica dell'oggetto, così ogni oggetto ha la sua sequenza di 5 immagini via via più rovinate:
+Da inserire nel prompt insieme alla descrizione specifica dell'oggetto, così ogni oggetto ha la sua sequenza di 5 immagini via via più rovinate.
+
+**Regola fondamentale:** le 5 fasi devono restare **lo stesso identico oggetto** — stesso colore, stessa forma/silhouette, stessa inquadratura/angolazione dall'alto. Cambia solo quanto appare rovinato (crepe, ammaccature, macchie di ruggine, vernice scrostata), mai il design dell'oggetto. Generazioni indipendenti tendono a "reinterpretare" colore e forma ad ogni fase — per questo, oltre alla frase di fase danno, ogni prompt deve includere ESPLICITAMENTE il colore/materiale esatto dell'oggetto (preso dalla descrizione specifica, es. "dark navy blue plastic body") e la frase di blocco qui sotto. Quando possibile, generare le fasi 2-5 in image-to-image usando la fase 1 come immagine di riferimento (guidance/influenza moderata), non da zero via solo testo.
+
+Frase di blocco da aggiungere a ogni fase (dalla 2 in poi): `identical shape, silhouette, proportions, camera angle and base color to the undamaged version of this object — do not redesign it, do not change its color, do not open or rotate it, add ONLY surface damage`
 
 1. **Intatto:** `in pristine, undamaged condition, clean and intact`
-2. **Leggero danno:** `with minor scuffs, small scratches and light dirt, slightly worn but mostly intact`
-3. **Danneggiato:** `visibly damaged with dents, scratches and rust spots, starting to look beaten down`
-4. **Molto danneggiato:** `heavily damaged, large dents, cracks and rust, parts bent or broken, close to falling apart`
-5. **Quasi distrutto:** `nearly destroyed, crumbling wreck, broken and battered almost beyond recognition, barely holding together`
+2. **Leggero danno:** `with minor scuffs, small scratches and light dirt, slightly worn but mostly intact, identical shape, silhouette, proportions, camera angle and base color to the undamaged version of this object — do not redesign it, do not change its color, do not open or rotate it, add ONLY surface damage`
+3. **Danneggiato:** `visibly damaged with dents, scratches and rust spots, starting to look beaten down, identical shape, silhouette, proportions, camera angle and base color to the undamaged version of this object — do not redesign it, do not change its color, do not open or rotate it, add ONLY surface damage`
+4. **Molto danneggiato:** `heavily damaged, large dents, cracks and rust, parts bent but still attached, close to falling apart, identical shape, silhouette, proportions, camera angle and base color to the undamaged version of this object — do not redesign it, do not change its color, do not open or rotate it, add ONLY surface damage`
+5. **Quasi distrutto:** `nearly destroyed, crumbling wreck, broken and battered almost beyond recognition, barely holding together, but still recognizably the same object, identical shape, silhouette, proportions, camera angle and base color to the undamaged version of this object — do not redesign it, do not change its color, do not open or rotate it, add ONLY surface damage`
 
 ### Elenco oggetti definiti ([DESCRIZIONE SPECIFICA])
 
@@ -174,7 +178,7 @@ a park bench, wooden slats on a metal frame, viewed from directly above showing 
 
 **Cassonetto:**
 ```
-a large plastic garbage dumpster with wheels, hinged flat lid on top, municipal waste bin
+a large dark navy blue plastic garbage dumpster with wheels, hinged flat lid on top (closed), municipal waste bin, straight top-down view with no perspective tilt
 ```
 
 **Barile:**

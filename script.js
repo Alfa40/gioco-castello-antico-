@@ -1758,6 +1758,12 @@ class Game {
     }
   }
 
+  // Trees and benches are park furniture anchored to the path — their sprite
+  // art always faces the path, so it must stay fixed relative to the field
+  // (letting the field's own CSS rotation carry them, same as the path
+  // itself) instead of counter-rotating to face the viewer.
+  static PATH_FACING_OBJECT_TYPES = new Set(["albero", "panchina"]);
+
   // Shared by both the host's live draw() and the guest's drawFromSnapshot()
   // — park objects are static (no interpolation needed), so both paths can
   // draw straight from whatever list (live this.parkObjects, or the latest
@@ -1769,6 +1775,13 @@ class Game {
       const sprite = Sprites.get(`object_${obj.typeKey}_${stage}`);
       ctx.save();
       ctx.translate(obj.x, obj.y);
+      // Bins/fences/etc are freestanding props (not tied to the path's
+      // direction) — counter-rotate them so they always look upright to the
+      // viewer, the same way the field's portrait rotation is undone for
+      // touch input (see bindJoystick/bindAimStick).
+      if (this.portraitRotated && !Game.PATH_FACING_OBJECT_TYPES.has(obj.typeKey)) {
+        ctx.rotate(-Math.PI / 2);
+      }
       if (sprite) {
         drawSpriteFit(ctx, sprite, obj.radius * 2.6);
       } else {
