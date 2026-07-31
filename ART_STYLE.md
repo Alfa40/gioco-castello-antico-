@@ -152,49 +152,53 @@ face, eyes, hands, arms, fingers, people, characters, front view, side view, bac
 
 ### Fasi di danno ([FASE DANNO])
 
-Da inserire nel prompt insieme alla descrizione specifica dell'oggetto, così ogni oggetto ha la sua sequenza di 5 immagini via via più rovinate:
+Da inserire nel prompt insieme alla descrizione specifica dell'oggetto, così ogni oggetto ha la sua sequenza di 5 immagini via via più rovinate.
+
+**Regola fondamentale:** le 5 fasi devono restare **lo stesso identico oggetto** — stesso colore, stessa forma/silhouette, stessa inquadratura/angolazione dall'alto. Cambia solo quanto appare rovinato (crepe, ammaccature, macchie di ruggine, vernice scrostata), mai il design dell'oggetto. Generazioni indipendenti tendono a "reinterpretare" colore e forma ad ogni fase — per questo, oltre alla frase di fase danno, ogni prompt deve includere ESPLICITAMENTE il colore/materiale esatto dell'oggetto (preso dalla descrizione specifica, es. "dark navy blue plastic body") e la frase di blocco qui sotto. Quando possibile, generare le fasi 2-5 in image-to-image usando la fase 1 come immagine di riferimento (guidance/influenza moderata), non da zero via solo testo.
+
+Frase di blocco da aggiungere a ogni fase (dalla 2 in poi): `identical shape, silhouette, proportions, camera angle and base color to the undamaged version of this object — do not redesign it, do not change its color, do not open or rotate it, add ONLY surface damage`
 
 1. **Intatto:** `in pristine, undamaged condition, clean and intact`
-2. **Leggero danno:** `with minor scuffs, small scratches and light dirt, slightly worn but mostly intact`
-3. **Danneggiato:** `visibly damaged with dents, scratches and rust spots, starting to look beaten down`
-4. **Molto danneggiato:** `heavily damaged, large dents, cracks and rust, parts bent or broken, close to falling apart`
-5. **Quasi distrutto:** `nearly destroyed, crumbling wreck, broken and battered almost beyond recognition, barely holding together`
+2. **Leggero danno:** `with minor scuffs, small scratches and light dirt, slightly worn but mostly intact, identical shape, silhouette, proportions, camera angle and base color to the undamaged version of this object — do not redesign it, do not change its color, do not open or rotate it, add ONLY surface damage`
+3. **Danneggiato:** `visibly damaged with dents, scratches and rust spots, starting to look beaten down, identical shape, silhouette, proportions, camera angle and base color to the undamaged version of this object — do not redesign it, do not change its color, do not open or rotate it, add ONLY surface damage`
+4. **Molto danneggiato:** `heavily damaged, large dents, cracks and rust, parts bent but still attached, close to falling apart, identical shape, silhouette, proportions, camera angle and base color to the undamaged version of this object — do not redesign it, do not change its color, do not open or rotate it, add ONLY surface damage`
+5. **Quasi distrutto:** `nearly destroyed, crumbling wreck, broken and battered almost beyond recognition, barely holding together, but still recognizably the same object, identical shape, silhouette, proportions, camera angle and base color to the undamaged version of this object — do not redesign it, do not change its color, do not open or rotate it, add ONLY surface damage`
 
 ### Elenco oggetti definiti ([DESCRIZIONE SPECIFICA])
 
 **Cestino della spazzatura:**
 ```
-a park trash bin, metal mesh or perforated body, small round opening on top, mounted on a short post
+a park trash bin, dark green perforated metal mesh body, small round opening on top, mounted on a short brown wooden post, straight top-down view with no perspective tilt
 ```
 
 **Panchina:**
 ```
-a park bench, wooden slats on a metal frame, viewed from directly above showing the seat and backrest
+a park bench, warm brown wooden slats on a dark metal frame, viewed from directly above showing the seat and backrest as two horizontal slat rows, straight top-down view with no perspective tilt
 ```
 
 **Cassonetto:**
 ```
-a large plastic garbage dumpster with wheels, hinged flat lid on top, municipal waste bin
+a large dark navy blue plastic garbage dumpster with wheels, hinged flat lid on top (closed), municipal waste bin, straight top-down view with no perspective tilt
 ```
 
 **Barile:**
 ```
-a metal oil drum/barrel standing upright, cylindrical shape with visible rim ridges, industrial look
+a weathered blue-gray metal oil drum/barrel, seen from directly above showing only the round top lid with visible rim ridges, industrial look, straight top-down view with no perspective tilt
 ```
 
 **Recinzione di legno:**
 ```
-a short section of wooden picket fence, vertical wooden slats connected by horizontal rails
+a short section of wooden picket fence, warm brown wood, exactly 4 vertical wooden posts connected by horizontal rails, straight top-down view with no perspective tilt
 ```
 
 **Albero:**
 ```
-a park tree seen from directly above, round leafy canopy, trunk barely visible at the very center
+a park tree seen from directly above, round vibrant green leafy canopy, brown trunk barely visible at the very center, straight top-down view with no perspective tilt
 ```
 
 **Lampione:**
 ```
-a park street lamp post seen from directly above, circular light fixture at the top, thin pole barely visible at the center
+a park street lamp post seen from directly above, circular light fixture with a warm golden yellow glow, dark metal rim, thin pole barely visible at the center, straight top-down view with no perspective tilt
 ```
 
 ---
