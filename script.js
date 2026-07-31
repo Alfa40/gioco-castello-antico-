@@ -792,27 +792,31 @@ class Game {
       const cx = rect.left + rect.width / 2;
       const cy = rect.top + rect.height / 2;
       const realMaxRadius = rect.width / 2;
-      let dx = clientX - cx, dy = clientY - cy;
-      if (this.portraitRotated) {
-        // undo the container's 90deg CSS rotation: a real on-screen drag has
-        // to be mapped back onto the game's own (unrotated) up/down/left/right
-        [dx, dy] = [dy, -dx];
-      }
+      const dx = clientX - cx, dy = clientY - cy;
       const mag = Math.hypot(dx, dy) || 1;
       const clampedFrac = Math.min(mag, realMaxRadius) / realMaxRadius; // 0..1, scale-independent
+      // Knob follows the raw finger drag on screen, unrotated — it must visually
+      // track the touch itself regardless of how the field underneath is rotated.
       const fx = (dx / mag) * clampedFrac;
       const fy = (dy / mag) * clampedFrac;
       knob.style.transform = `translate(${fx * knobTravel}px, ${fy * knobTravel}px)`;
 
-      const knobMag = Math.hypot(fx, fy);
+      // Separately, undo the field's 90deg CSS rotation for the SIMULATION
+      // input only: a real on-screen drag has to be mapped back onto the
+      // game's own (unrotated) up/down/left/right.
+      const [ix, iy] = this.portraitRotated ? [dy, -dx] : [dx, dy];
+      const ifx = (ix / mag) * clampedFrac;
+      const ify = (iy / mag) * clampedFrac;
+
+      const knobMag = Math.hypot(ifx, ify);
       if (knobMag < 0.2) {
         this.input.touchMove = { up: false, down: false, left: false, right: false };
         this.input.touchMoveVec = null;
       } else {
-        this.input.touchMove = { left: fx < -0.3, right: fx > 0.3, up: fy < -0.3, down: fy > 0.3 };
+        this.input.touchMove = { left: ifx < -0.3, right: ifx > 0.3, up: ify < -0.3, down: ify > 0.3 };
         // True 360° direction (unit vector) — see Player.update(), preferred
         // over the 8-way touchMove booleans above whenever it's available.
-        this.input.touchMoveVec = { x: fx / knobMag, y: fy / knobMag };
+        this.input.touchMoveVec = { x: ifx / knobMag, y: ify / knobMag };
       }
     };
     const reset = () => {
@@ -857,18 +861,20 @@ class Game {
       const cx = rect.left + rect.width / 2;
       const cy = rect.top + rect.height / 2;
       const realMaxRadius = rect.width / 2;
-      let dx = clientX - cx, dy = clientY - cy;
-      if (this.portraitRotated) {
-        [dx, dy] = [dy, -dx];
-      }
+      const dx = clientX - cx, dy = clientY - cy;
       const mag = Math.hypot(dx, dy) || 1;
       const clampedFrac = Math.min(mag, realMaxRadius) / realMaxRadius;
+      // Knob follows the raw finger drag on screen, unrotated (see bindJoystick).
       const fx = (dx / mag) * clampedFrac;
       const fy = (dy / mag) * clampedFrac;
       knob.style.transform = `translate(${fx * knobTravel}px, ${fy * knobTravel}px)`;
 
-      const knobMag = Math.hypot(fx, fy);
-      this.input.touchAim = knobMag < 0.2 ? null : { x: fx / knobMag, y: fy / knobMag };
+      // Simulation input uses the field-rotation-compensated vector instead.
+      const [ix, iy] = this.portraitRotated ? [dy, -dx] : [dx, dy];
+      const ifx = (ix / mag) * clampedFrac;
+      const ify = (iy / mag) * clampedFrac;
+      const knobMag = Math.hypot(ifx, ify);
+      this.input.touchAim = knobMag < 0.2 ? null : { x: ifx / knobMag, y: ify / knobMag };
     };
     const reset = () => {
       touchId = null;
