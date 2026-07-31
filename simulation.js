@@ -113,13 +113,13 @@ const CONFIG = {
 // open up the path. Each has 5 damage-stage sprites (see SPRITE_SOURCES in
 // script.js) — objectDamageStage() picks which one to draw from hp/maxHp.
 const OBJECT_TYPES = {
-  cestino: { hp: 30, radius: 16 },
-  panchina: { hp: 70, radius: 32 },
-  cassonetto: { hp: 90, radius: 28 },
-  barile: { hp: 45, radius: 18 },
-  recinzione: { hp: 55, radius: 26 },
-  albero: { hp: 140, radius: 24 },
-  lampione: { hp: 50, radius: 14 },
+  cestino: { hp: 60, radius: 16 },
+  panchina: { hp: 140, radius: 32 },
+  cassonetto: { hp: 180, radius: 28 },
+  barile: { hp: 90, radius: 18 },
+  recinzione: { hp: 110, radius: 26 },
+  albero: { hp: 280, radius: 24 },
+  lampione: { hp: 100, radius: 14 },
 };
 
 // 1 = intact, 5 = nearly destroyed — see ART_STYLE.md's 5 damage stages.
