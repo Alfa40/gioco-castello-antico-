@@ -518,6 +518,11 @@ html.touch-device.portrait-controls #canvas-rotate-wrap canvas {
 }
 html.touch-device.portrait-controls #hud {
   top: 0; height: 110px;
+  /* Same reasoning as the shop panel/joystick fixes: env(safe-area-inset-top)
+     is the real notch/status-bar height when there is one (0 otherwise), so
+     the HP bar clears the phone's clock/battery bar instead of sitting
+     under it. */
+  padding-top: calc(10px + env(safe-area-inset-top, 0px));
   background: rgba(255, 255, 255, 0.03);
   border-bottom: 1px solid var(--panel-border);
 }
