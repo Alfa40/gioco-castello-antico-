@@ -721,7 +721,7 @@ class Game {
   setupResponsiveScaling() {
     const container = document.getElementById("game-container");
     // Must match the #game-container width/height in the corresponding CSS class.
-    const PORTRAIT_TOTAL = { w: 960, h: 2146 };
+    const PORTRAIT_TOTAL = { w: 960, h: 1966 };
     const LANDSCAPE_TOTAL = { w: 1740, h: 700 };
 
     // env(safe-area-inset-*) is CSS-only — there's no JS API for the real
@@ -762,13 +762,12 @@ class Game {
           // container down by that same real amount so nothing ends up
           // underneath it.
           const inset = readInset();
-          // Fill (almost) the full device width — PORTRAIT_TOTAL's aspect
-          // ratio is already close to a typical phone's, so a small 0.97
-          // safety factor is enough to keep the bottom/top edges from
-          // slightly overflowing the viewport on most phones, while the
-          // field still reaches essentially edge to edge (a couple of
-          // pixels of margin at most either side).
-          const scale = ((window.innerWidth - 0) / total.w) * 0.97;
+          // Fill the full device width exactly, edge to edge — no safety
+          // margin. PORTRAIT_TOTAL's height (see above) is deliberately
+          // sized close to a real phone's proportions at this scale (see
+          // style.css's portrait touch-controls comment) so this doesn't
+          // overflow top/bottom on typical phones.
+          const scale = window.innerWidth / total.w;
           container.style.transform = `translate(0px, ${inset.top}px) scale(${scale})`;
         } else {
           // Landscape: unchanged fit-both-dimensions behavior, no notch
