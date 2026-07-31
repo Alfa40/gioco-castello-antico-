@@ -764,10 +764,15 @@ class Game {
         // together, uniformly, with nothing left underneath.
         const shiftTop = portrait ? inset.top : 0;
         const shiftLeft = portrait ? 0 : inset.left;
-        const scale = Math.min(
-          (window.innerWidth - shiftLeft) / total.w,
-          (window.innerHeight - shiftTop) / total.h
-        );
+        // Portrait scales to fill the full device width (PORTRAIT_TOTAL's
+        // aspect ratio is already close to a typical phone's, so this only
+        // ever needs a modest zoom) so the field's left/right edges always
+        // reach the screen edges, rather than fitting-with-letterboxing on
+        // whichever dimension has slack — landscape keeps the old fit-both
+        // behavior since matching width there isn't what was asked for.
+        const scale = portrait
+          ? (window.innerWidth - shiftLeft) / total.w
+          : Math.min((window.innerWidth - shiftLeft) / total.w, (window.innerHeight - shiftTop) / total.h);
         container.style.transform = `translate(${shiftLeft}px, ${shiftTop}px) scale(${scale})`;
       } else {
         this.portraitRotated = portrait; // desktop-window-narrow fallback only (no touch UI involved)
