@@ -535,6 +535,7 @@ class Game {
     };
 
     this._guestShopMode = null; // guest-only: 'pause' | 'zoneComplete', see openGuestShop
+    this._readyRequestPending = false; // guest-only: see closeGuestShop/applyGuestShopSync
 
     this.state = "menu"; // menu | playing | gameover
     this.lastTime = performance.now();
@@ -1121,9 +1122,13 @@ class Game {
       this.player.readyForNextZone = !!me.ready;
     }
     this.zoneClearPending = !!s.zoneClearPending;
+    // Once the server confirms our ready state (or the zone has actually
+    // advanced), the optimistic "don't reopen" window from closeGuestShop
+    // is no longer needed.
+    if (!this.zoneClearPending || (me && me.ready)) this._readyRequestPending = false;
 
     const shopScreenHidden = document.getElementById("upgrade-screen").classList.contains("hidden");
-    if (this.zoneClearPending && shopScreenHidden && !(me && me.ready)) {
+    if (this.zoneClearPending && shopScreenHidden && !(me && me.ready) && !this._readyRequestPending) {
       this.openGuestShop("zoneComplete");
     } else if (!shopScreenHidden && this._guestShopMode) {
       this.renderShopContent(); // keep the open panel's numbers fresh as new snapshots arrive
@@ -1176,6 +1181,11 @@ class Game {
     this.player.shopOpen = false;
     if (this._guestShopMode === "zoneComplete") {
       this.network.send({ type: "action", action: "readyForNextZone" });
+      // The server hasn't echoed our own "ready" back in a snapshot yet —
+      // without this flag, a snapshot arriving in that gap still shows
+      // zoneClearPending && !me.ready, and applyGuestShopSync would pop the
+      // shop panel back open right after we just closed it.
+      this._readyRequestPending = true;
     }
     this._guestShopMode = null;
     this.updateWaitOverlay(this._snapCurr);
