@@ -168,12 +168,12 @@ Frase di blocco da aggiungere a ogni fase (dalla 2 in poi): `identical shape, si
 
 **Cestino della spazzatura:**
 ```
-a park trash bin, metal mesh or perforated body, small round opening on top, mounted on a short post
+a park trash bin, dark green perforated metal mesh body, small round opening on top, mounted on a short brown wooden post, straight top-down view with no perspective tilt
 ```
 
 **Panchina:**
 ```
-a park bench, wooden slats on a metal frame, viewed from directly above showing the seat and backrest
+a park bench, warm brown wooden slats on a dark metal frame, viewed from directly above showing the seat and backrest as two horizontal slat rows, straight top-down view with no perspective tilt
 ```
 
 **Cassonetto:**
@@ -183,22 +183,22 @@ a large dark navy blue plastic garbage dumpster with wheels, hinged flat lid on 
 
 **Barile:**
 ```
-a metal oil drum/barrel standing upright, cylindrical shape with visible rim ridges, industrial look
+a weathered blue-gray metal oil drum/barrel, seen from directly above showing only the round top lid with visible rim ridges, industrial look, straight top-down view with no perspective tilt
 ```
 
 **Recinzione di legno:**
 ```
-a short section of wooden picket fence, vertical wooden slats connected by horizontal rails
+a short section of wooden picket fence, warm brown wood, exactly 4 vertical wooden posts connected by horizontal rails, straight top-down view with no perspective tilt
 ```
 
 **Albero:**
 ```
-a park tree seen from directly above, round leafy canopy, trunk barely visible at the very center
+a park tree seen from directly above, round vibrant green leafy canopy, brown trunk barely visible at the very center, straight top-down view with no perspective tilt
 ```
 
 **Lampione:**
 ```
-a park street lamp post seen from directly above, circular light fixture at the top, thin pole barely visible at the center
+a park street lamp post seen from directly above, circular light fixture with a warm golden yellow glow, dark metal rim, thin pole barely visible at the center, straight top-down view with no perspective tilt
 ```
 
 ---
