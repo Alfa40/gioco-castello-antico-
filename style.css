@@ -459,6 +459,8 @@ html.touch-device #upgrade-screen .shop-tab-btn { font-size: 15px; padding: 12px
   padding-top: 14px;
 }
 
+.upgrade-footer-actions { display: flex; align-items: center; gap: 10px; }
+
 .gameover-title { color: var(--danger); }
 .stats {
   text-align: left;

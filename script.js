@@ -606,6 +606,9 @@ class Game {
       if (this.network.isMultiplayer) this.closeGuestShop();
       else this.closeUpgradeMenu();
     });
+    document.getElementById("upgrade-exit-btn").addEventListener("click", () => {
+      this.exitRun();
+    });
     document.getElementById("mute-btn").addEventListener("click", () => {
       SoundManager.muted = !SoundManager.muted;
       document.getElementById("mute-btn").textContent = SoundManager.muted ? "🔇" : "🔊";
@@ -1189,6 +1192,29 @@ class Game {
     }
     this._guestShopMode = null;
     this.updateWaitOverlay(this._snapCurr);
+  }
+
+  // "Esci" in the shop screen (either pause or zoneComplete, host or guest):
+  // leaves the current run entirely and returns to the start screen. Solo
+  // play is saved first so "Continua partita" can pick it back up later —
+  // multiplayer has no equivalent mid-run save, so it just disconnects
+  // (same cleanup as the "Lascia la stanza" button; the server keeps the
+  // room going for whoever's left, see onPeerLeft).
+  exitRun() {
+    if (this.network.isMultiplayer) {
+      this.network.disconnect();
+      this.connectedPeerIds.clear();
+      this._snapPrev = null;
+      this._snapCurr = null;
+      this.network.onStatusChange();
+    } else {
+      this.player.shopOpen = false;
+      this.saveGame();
+    }
+    this.menuMode = null;
+    this._guestShopMode = null;
+    this.setState("menu");
+    this.refreshSaveSummary();
   }
 
   toggleGuestShop() {
