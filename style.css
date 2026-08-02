@@ -498,18 +498,29 @@ html.touch-device #upgrade-screen .shop-tab-btn { font-size: 15px; padding: 12px
 }
 html.touch-device #touch-controls { display: block; }
 
+/* Purely decorative background boxes marking the dedicated control strips
+   as distinct UI chrome (see the portrait/landscape rules further down for
+   sizing) — behind the actual buttons, which are separate elements in
+   #touch-controls positioned to land visually within these same zones. */
+#touch-strip-bottom, #touch-strip-left, #touch-strip-right {
+  position: absolute;
+  pointer-events: none;
+  background: rgba(255, 255, 255, 0.03);
+  display: none;
+}
+
 /* All touch control sizes/offsets below are the ONE size used in both
-   orientations now (previously portrait scaled these down — no longer:
-   the field now sits BEHIND the controls instead of stopping short of a
-   separate strip for them, so there's no budget pressure forcing smaller
-   buttons). Base positions here (left-stick/dash on the left, aim-stick and
-   throwable buttons on the right, pause floating center-ish) are what
-   portrait uses as-is; landscape overrides left/right/bottom below to
-   overlay the same-sized controls on its own, wider field instead. */
+   orientations (no more shrinking either one down) and — since both
+   portrait's bottom strip and landscape's left/right strips share their
+   outer edge with #game-container's own edge (see the strip rules further
+   down) — the SAME position values happen to work for both orientations
+   unchanged, with only the pause button needing a landscape-specific
+   override (it moves up next to the HUD there instead of joining this
+   same row). */
 .joystick-base {
   position: absolute;
   left: 40px;
-  bottom: 72px;
+  bottom: 20px;
   width: 260px;
   height: 260px;
   border-radius: 50%;
@@ -542,7 +553,7 @@ html.touch-device #touch-controls { display: block; }
 .aim-stick-base {
   position: absolute;
   right: 40px;
-  bottom: 72px;
+  bottom: 20px;
   width: 260px;
   height: 260px;
   border-radius: 50%;
@@ -589,9 +600,10 @@ html.touch-device #touch-controls { display: block; }
    not nested in #touch-action-cluster — it needs to align with the LEFT
    stick while the throwable buttons below align with the RIGHT one, so
    they can't share one positioned parent). Centered on the joystick's own
-   center (left:40 + half its 260 width). */
+   center (left:40 + half its 260 width); bottom clears the joystick's own
+   260 height + 20 margin + a 10px gap. */
 .touch-btn-medium { width: 132px; height: 132px; font-size: 52px; }
-#touch-dash { left: 104px; bottom: 352px; }
+#touch-dash { left: 104px; bottom: 290px; }
 
 /* Throwable select/throw sit directly above the aim stick. Centered the
    same way, mirrored (right:40 + half 260 width), as a group ~190px wide
@@ -599,16 +611,18 @@ html.touch-device #touch-controls { display: block; }
 #touch-action-cluster {
   position: absolute;
   right: 75px;
-  bottom: 352px;
+  bottom: 290px;
   width: 190px;
   height: 104px;
 }
 .touch-btn-small { width: 104px; height: 104px; font-size: 44px; left: 86px; top: 0; }
 .touch-btn-tiny { width: 76px; height: 76px; font-size: 32px; left: 0; top: 14px; }
 
-/* Pause floats centered between the two clusters, same elevated row. */
+/* Pause floats centered between the two clusters, same elevated row
+   (portrait, and landscape's control strips too) — landscape moves it up
+   next to the HUD instead (see below). */
 .touch-btn-pause {
-  bottom: 352px;
+  bottom: 290px;
   left: 50%;
   margin-left: -40px;
   width: 80px;
@@ -620,12 +634,12 @@ html.touch-device #touch-controls { display: block; }
    native 960x600 landscape simulation (see CONFIG in simulation.js —
    nothing about the game world's own coordinates changes), rotated 90° and
    scaled up 1.6x (960/600) so its rotated footprint exactly fills the same
-   960px width the HUD strip already uses. #touch-controls now overlays the
-   field directly instead of living in a separate strip below it (see the
-   bottom-anchored positions above) — #game-container only needs to be tall
-   enough for HUD_STRIP_HEIGHT + rotated-field-height (960 * 1.6 = 1536) + a
-   small bottom margin, not a whole extra strip for the controls too. */
-html.touch-device.portrait-controls #game-container { width: 960px; height: 1656px; }
+   960px width the HUD strip already uses. Controls live in their own
+   strip below the field (sized tightly to what they actually need — see
+   the shared .joystick-base etc rules above and #touch-strip-bottom below
+   — not overlapping it), so #game-container needs HUD_STRIP_HEIGHT +
+   rotated-field-height (960 * 1.6 = 1536) + CONTROL_STRIP_HEIGHT. */
+html.touch-device.portrait-controls #game-container { width: 960px; height: 2068px; }
 html.touch-device.portrait-controls #canvas-rotate-wrap {
   display: block;
   position: absolute;
@@ -649,18 +663,23 @@ html.touch-device.portrait-controls #hud {
   background: rgba(255, 255, 255, 0.03);
   border-bottom: 1px solid var(--panel-border);
 }
+html.touch-device.portrait-controls #touch-strip-bottom {
+  display: block;
+  left: 0; right: 0; bottom: 0; height: 432px; /* matches the joystick/dash/margin math above */
+  border-top: 1px solid var(--panel-border);
+}
 
-/* Phone/tablet held sideways: no more dedicated side panel — HUD is now a
-   thin strip across the TOP (matching portrait's approach) with the pause
-   button floating at its top-left corner, and the field fills essentially
-   the rest of the screen with the joystick/aim-stick/action buttons
-   overlaying its lower corners directly (positions below are computed
-   relative to the field's own edges — see the canvas rule's comment). */
-html.touch-device.landscape-controls #game-container { width: 1600px; height: 705px; }
-/* Field is centered in the container's width: (1600-960)/2 = 320. */
-html.touch-device.landscape-controls canvas { position: absolute; top: 85px; left: 320px; }
+/* Phone/tablet held sideways: HUD is a thin strip across the TOP (like
+   portrait) with the pause button at its top-left corner. The field sits
+   directly below it, and joystick/aim-stick each get their own dedicated
+   SIDE strip sized to their own 260px width + margins (not a full-height
+   panel wasting horizontal space) — #touch-strip-left/#touch-strip-right
+   below. */
+html.touch-device.landscape-controls #game-container { width: 1600px; height: 720px; }
+/* Field is centered between the two 320px side strips: (1600-960)/2 = 320. */
+html.touch-device.landscape-controls canvas { position: absolute; top: 100px; left: 320px; }
 html.touch-device.landscape-controls #hud {
-  top: 0; left: 0; right: 0; height: 85px;
+  top: 0; left: 0; right: 0; height: 100px;
   /* Clears the pause button floating at the top-left corner (15 + 80 + 15). */
   padding-left: 110px;
   background: rgba(255, 255, 255, 0.03);
@@ -669,11 +688,13 @@ html.touch-device.landscape-controls #hud {
 html.touch-device.landscape-controls .touch-btn-pause {
   top: 15px; left: 15px; margin-left: 0; bottom: auto;
 }
-/* Overlay positions below: joystick/aim-stick sit 20px inside the field's
-   own left/right edges (field spans x=320 to x=1280) rather than the
-   container's — dash/action-cluster/pause stay in the same elevated row
-   above them as portrait, computed the same way (centered on each stick). */
-html.touch-device.landscape-controls .joystick-base { left: 340px; bottom: 40px; top: auto; right: auto; }
-html.touch-device.landscape-controls .aim-stick-base { right: 340px; bottom: 40px; top: auto; left: auto; }
-html.touch-device.landscape-controls #touch-dash { left: 404px; bottom: 320px; }
-html.touch-device.landscape-controls #touch-action-cluster { right: 375px; bottom: 320px; left: auto; }
+html.touch-device.landscape-controls #touch-strip-left {
+  display: block;
+  left: 0; top: 100px; bottom: 0; width: 320px;
+  border-right: 1px solid var(--panel-border);
+}
+html.touch-device.landscape-controls #touch-strip-right {
+  display: block;
+  right: 0; top: 100px; bottom: 0; width: 320px;
+  border-left: 1px solid var(--panel-border);
+}
