@@ -103,6 +103,11 @@ canvas {
   text-shadow: 0 1px 2px #000;
 }
 
+/* Bigger, more prominent health bar on phones/tablets, always at the top of
+   the layout (see the portrait/landscape #hud rules further down). */
+html.touch-device .hp-bar { width: 260px; height: 32px; }
+html.touch-device .hp-label { font-size: 14px; }
+
 .dash-indicator {
   width: 60px;
   height: 8px;
@@ -493,142 +498,14 @@ html.touch-device #upgrade-screen .shop-tab-btn { font-size: 15px; padding: 12px
 }
 html.touch-device #touch-controls { display: block; }
 
-/* Phone/tablet held upright (see setupResponsiveScaling): the game field
-   must stay clean, so both the HUD text and the touch controls move outside
-   of it — HUD in a strip ABOVE the canvas, controls in a strip BELOW —
-   instead of overlaying the canvas. The field itself is the native 960x600
-   landscape simulation (see CONFIG in simulation.js — nothing about the
-   game world's own coordinates changes), just rotated 90° and scaled up
-   1.6x (960/600) so its rotated footprint exactly fills the same 960px
-   width the HUD/control strips already use, instead of being squeezed
-   down to fit a portrait phone's narrower width unrotated. #game-container
-   is sized to HUD_STRIP_HEIGHT + rotated-field-height (960 * 1.6 = 1536) +
-   CONTROL_STRIP_HEIGHT to make room for all three. */
-html.touch-device.portrait-controls #game-container { width: 960px; height: 1916px; }
-html.touch-device.portrait-controls #canvas-rotate-wrap {
-  display: block;
-  position: absolute;
-  top: 80px; left: 0;
-  width: 960px; height: 1536px;
-}
-html.touch-device.portrait-controls #canvas-rotate-wrap canvas {
-  position: absolute;
-  top: 50%; left: 50%;
-  width: 960px; height: 600px;
-  transform: translate(-50%, -50%) rotate(90deg) scale(1.6);
-  transform-origin: center center;
-}
-html.touch-device.portrait-controls #hud {
-  top: 0; height: 80px;
-  /* The real notch/status-bar clearance is handled at the container level
-     in setupResponsiveScaling() (see the insetProbe/shiftTop comment there)
-     — env() applied here would only end up `inset * scale` real pixels once
-     rendered (the container itself is scaled down), nowhere near enough. */
-  padding-top: 10px;
-  background: rgba(255, 255, 255, 0.03);
-  border-bottom: 1px solid var(--panel-border);
-}
-html.touch-device.portrait-controls #touch-controls {
-  top: 1616px;
-  height: 300px;
-  background: rgba(255, 255, 255, 0.03);
-  border-top: 1px solid var(--panel-border);
-}
-/* The field now fills the device width exactly (see setupResponsiveScaling),
-   which on most phones means less spare vertical room than before — this
-   whole strip and everything in it below is scaled to 60% of its
-   landscape-mode size (still comfortably tappable, see the 2x note further
-   down) so the layout's overall proportions land close to a real phone's
-   instead of overflowing top/bottom — including clearing the home-indicator
-   bar at the very bottom on notched iPhones, not just the status bar at the
-   top (setupResponsiveScaling() also clamps the scale further at runtime as
-   a last-resort safety net, in case some device's insets are still bigger
-   than this static budget assumes). Landscape is untouched: none of these
-   selectors match there, so it keeps the original, larger control sizes. */
-html.touch-device.portrait-controls .joystick-base,
-html.touch-device.portrait-controls .aim-stick-base {
-  width: 156px; height: 156px; bottom: 43px;
-}
-html.touch-device.portrait-controls .joystick-base { left: 24px; }
-html.touch-device.portrait-controls .aim-stick-base { right: 24px; }
-html.touch-device.portrait-controls .joystick-knob,
-html.touch-device.portrait-controls .aim-stick-knob {
-  width: 67px; height: 67px; margin-left: -34px; margin-top: -34px;
-}
-html.touch-device.portrait-controls #touch-action-cluster {
-  left: 222px; top: 72px; width: 132px; height: 156px;
-}
-html.touch-device.portrait-controls .touch-btn-medium { width: 79px; height: 79px; font-size: 31px; top: 6px; }
-html.touch-device.portrait-controls #touch-dash { left: 26px; }
-html.touch-device.portrait-controls .touch-btn-small { width: 62px; height: 62px; font-size: 26px; top: 95px; }
-html.touch-device.portrait-controls #touch-bomb-throw { left: 7px; }
-html.touch-device.portrait-controls .touch-btn-tiny { width: 46px; height: 46px; font-size: 19px; top: 95px; }
-html.touch-device.portrait-controls #touch-bomb-select { left: 79px; }
-html.touch-device.portrait-controls .touch-btn-pause {
-  top: 14px; width: 48px; height: 48px; font-size: 19px; margin-left: -24px;
-}
-
-/* Phone/tablet held sideways: HUD text + the movement joystick share a panel
-   on the LEFT of the canvas (so the thumb that reads the stats above also
-   rests on the stick), the aim stick + action buttons (dash/bomb/pause) live
-   in a panel on the RIGHT — both outside the field. #touch-controls itself
-   spans the full container width (it's just an invisible, pointer-events:none
-   layer) so its children can be edge-anchored into either panel without
-   moving them in the DOM; the actual visible panel backgrounds come from
-   #hud (left) — the right side has no boxed background, the controls just
-   float there. The shared container is taller than the canvas so the left
-   panel can fit HUD text + joystick stacked (and the right one the aim stick
-   + action buttons) without overlap; canvas and HUD are vertically centered
-   within that taller height. */
-html.touch-device.landscape-controls #game-container { width: 1740px; height: 700px; }
-/* left:300 would butt the field right up against the HUD/joystick panel
-   (which is exactly 300px wide) while dumping all the leftover space on the
-   right, past the field, before the floating aim-stick/action buttons/pause
-   — visually lopsided. The aim-stick (right:110px, 260px wide) is the
-   leftmost of those floating controls, at x=1370; centering the 960-wide
-   field between the HUD panel's right edge (300) and that boundary (1370)
-   gives an equal ~55px gap on both sides instead. */
-html.touch-device.landscape-controls canvas { position: absolute; top: 50px; left: 355px; }
-html.touch-device.landscape-controls #hud {
-  top: 0; left: 0; right: auto; bottom: auto;
-  width: 300px; height: 700px;
-  flex-direction: column;
-  justify-content: flex-start;
-  align-items: center;
-  gap: 18px;
-  /* Held sideways, a phone's status bar (clock/battery) can end up running
-     along this same left edge depending on which way it was rotated —
-     env(safe-area-inset-left) is that real inset when there is one (0
-     otherwise), nudging the HUD text in from under it without affecting
-     phones/orientations where there's nothing to avoid. */
-  padding: 36px 16px 0 calc(16px + env(safe-area-inset-left, 0px));
-  background: rgba(255, 255, 255, 0.03);
-  border-right: 1px solid var(--panel-border);
-}
-html.touch-device.landscape-controls .hud-left,
-html.touch-device.landscape-controls .hud-right {
-  flex-direction: column;
-  align-items: center;
-}
-html.touch-device.landscape-controls .hud-center { text-align: center; }
-html.touch-device.landscape-controls #touch-controls {
-  top: 0;
-  left: 0;
-  width: 1740px;
-  height: 700px;
-}
-html.touch-device.landscape-controls .joystick-base {
-  left: calc(20px + env(safe-area-inset-left, 0px)); bottom: 40px; top: auto; right: auto;
-}
-html.touch-device.landscape-controls .aim-stick-base {
-  right: 110px; bottom: 40px; top: auto; left: auto;
-}
-html.touch-device.landscape-controls .touch-btn-pause {
-  right: 200px; left: auto; margin-left: 0;
-}
-
-/* All touch control sizes/offsets below are 2x their original values (see
-   git history) — on-screen buttons this small were hard to hit reliably. */
+/* All touch control sizes/offsets below are the ONE size used in both
+   orientations now (previously portrait scaled these down — no longer:
+   the field now sits BEHIND the controls instead of stopping short of a
+   separate strip for them, so there's no budget pressure forcing smaller
+   buttons). Base positions here (left-stick/dash on the left, aim-stick and
+   throwable buttons on the right, pause floating center-ish) are what
+   portrait uses as-is; landscape overrides left/right/bottom below to
+   overlay the same-sized controls on its own, wider field instead. */
 .joystick-base {
   position: absolute;
   left: 40px;
@@ -679,6 +556,18 @@ html.touch-device.landscape-controls .touch-btn-pause {
   border: 2px solid rgba(62, 198, 224, 0.7);
 }
 
+/* See Game.updateHUD(): toggled while a throwable is armed (the next aim
+   press throws it instead of firing the ranged weapon), so it's visually
+   obvious before pressing which action the stick will trigger. */
+.aim-stick-base.armed {
+  background: rgba(232, 122, 61, 0.12);
+  border-color: rgba(232, 122, 61, 0.55);
+}
+.aim-stick-base.armed .aim-stick-knob {
+  background: rgba(232, 122, 61, 0.5);
+  border-color: rgba(232, 122, 61, 0.8);
+}
+
 .touch-btn {
   position: absolute;
   pointer-events: all;
@@ -696,36 +585,95 @@ html.touch-device.landscape-controls .touch-btn-pause {
 }
 .touch-btn:active { background: rgba(232, 163, 61, 0.35); }
 
-/* Remaining action buttons (attack and manual fire are both gone — melee
-   and ranged-in-range both fire automatically on touch, see
-   Player.autoMeleeAttack / autoFireRanged — dash/bomb-throw/bomb-select stay
-   manual): dash centered on top, the two bomb buttons centered below it.
-   Sits in the gap between the two sticks (portrait) or above the aim stick
-   (landscape) — see the positioning rules further up for each mode. */
+/* Dash sits directly above the movement joystick (own top-level element,
+   not nested in #touch-action-cluster — it needs to align with the LEFT
+   stick while the throwable buttons below align with the RIGHT one, so
+   they can't share one positioned parent). Centered on the joystick's own
+   center (left:40 + half its 260 width). */
+.touch-btn-medium { width: 132px; height: 132px; font-size: 52px; }
+#touch-dash { left: 104px; bottom: 352px; }
+
+/* Throwable select/throw sit directly above the aim stick. Centered the
+   same way, mirrored (right:40 + half 260 width), as a group ~190px wide
+   (76 select + 10 gap + 104 throw). */
 #touch-action-cluster {
   position: absolute;
-  left: 370px;
-  top: 120px;
-  width: 220px;
-  height: 260px;
+  right: 75px;
+  bottom: 352px;
+  width: 190px;
+  height: 104px;
 }
-html.touch-device.landscape-controls #touch-action-cluster {
-  left: auto;
-  right: 130px;
-  top: 130px;
-}
-.touch-btn-medium { width: 132px; height: 132px; font-size: 52px; top: 10px; }
-#touch-dash { left: 44px; }
-.touch-btn-small { width: 104px; height: 104px; font-size: 44px; top: 158px; }
-#touch-bomb-throw { left: 12px; }
-.touch-btn-tiny { width: 76px; height: 76px; font-size: 32px; top: 158px; }
-#touch-bomb-select { left: 132px; }
+.touch-btn-small { width: 104px; height: 104px; font-size: 44px; left: 86px; top: 0; }
+.touch-btn-tiny { width: 76px; height: 76px; font-size: 32px; left: 0; top: 14px; }
 
+/* Pause floats centered between the two clusters, same elevated row. */
 .touch-btn-pause {
-  top: 24px;
+  bottom: 352px;
   left: 50%;
   margin-left: -40px;
   width: 80px;
   height: 80px;
   font-size: 32px;
 }
+
+/* Phone/tablet held upright (see setupResponsiveScaling): the field is the
+   native 960x600 landscape simulation (see CONFIG in simulation.js —
+   nothing about the game world's own coordinates changes), rotated 90° and
+   scaled up 1.6x (960/600) so its rotated footprint exactly fills the same
+   960px width the HUD strip already uses. #touch-controls now overlays the
+   field directly instead of living in a separate strip below it (see the
+   bottom-anchored positions above) — #game-container only needs to be tall
+   enough for HUD_STRIP_HEIGHT + rotated-field-height (960 * 1.6 = 1536) + a
+   small bottom margin, not a whole extra strip for the controls too. */
+html.touch-device.portrait-controls #game-container { width: 960px; height: 1656px; }
+html.touch-device.portrait-controls #canvas-rotate-wrap {
+  display: block;
+  position: absolute;
+  top: 100px; left: 0;
+  width: 960px; height: 1536px;
+}
+html.touch-device.portrait-controls #canvas-rotate-wrap canvas {
+  position: absolute;
+  top: 50%; left: 50%;
+  width: 960px; height: 600px;
+  transform: translate(-50%, -50%) rotate(90deg) scale(1.6);
+  transform-origin: center center;
+}
+html.touch-device.portrait-controls #hud {
+  top: 0; height: 100px;
+  /* The real notch/status-bar clearance is handled at the container level
+     in setupResponsiveScaling() (see the insetProbe/shiftTop comment there)
+     — env() applied here would only end up `inset * scale` real pixels once
+     rendered (the container itself is scaled down), nowhere near enough. */
+  padding-top: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid var(--panel-border);
+}
+
+/* Phone/tablet held sideways: no more dedicated side panel — HUD is now a
+   thin strip across the TOP (matching portrait's approach) with the pause
+   button floating at its top-left corner, and the field fills essentially
+   the rest of the screen with the joystick/aim-stick/action buttons
+   overlaying its lower corners directly (positions below are computed
+   relative to the field's own edges — see the canvas rule's comment). */
+html.touch-device.landscape-controls #game-container { width: 1600px; height: 705px; }
+/* Field is centered in the container's width: (1600-960)/2 = 320. */
+html.touch-device.landscape-controls canvas { position: absolute; top: 85px; left: 320px; }
+html.touch-device.landscape-controls #hud {
+  top: 0; left: 0; right: 0; height: 85px;
+  /* Clears the pause button floating at the top-left corner (15 + 80 + 15). */
+  padding-left: 110px;
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid var(--panel-border);
+}
+html.touch-device.landscape-controls .touch-btn-pause {
+  top: 15px; left: 15px; margin-left: 0; bottom: auto;
+}
+/* Overlay positions below: joystick/aim-stick sit 20px inside the field's
+   own left/right edges (field spans x=320 to x=1280) rather than the
+   container's — dash/action-cluster/pause stay in the same elevated row
+   above them as portrait, computed the same way (centered on each stick). */
+html.touch-device.landscape-controls .joystick-base { left: 340px; bottom: 40px; top: auto; right: auto; }
+html.touch-device.landscape-controls .aim-stick-base { right: 340px; bottom: 40px; top: auto; left: auto; }
+html.touch-device.landscape-controls #touch-dash { left: 404px; bottom: 320px; }
+html.touch-device.landscape-controls #touch-action-cluster { right: 375px; bottom: 320px; left: auto; }
