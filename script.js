@@ -721,8 +721,8 @@ class Game {
   setupResponsiveScaling() {
     const container = document.getElementById("game-container");
     // Must match the #game-container width/height in the corresponding CSS class.
-    const PORTRAIT_TOTAL = { w: 960, h: 1916 };
-    const LANDSCAPE_TOTAL = { w: 1740, h: 700 };
+    const PORTRAIT_TOTAL = { w: 960, h: 2068 };
+    const LANDSCAPE_TOTAL = { w: 1600, h: 720 };
 
     // env(safe-area-inset-*) is CSS-only — there's no JS API for the real
     // notch/status-bar size — so a hidden probe element with padding driven
@@ -758,38 +758,29 @@ class Game {
         // raw drag input back into the field's own (unrotated) coordinate space.
         this.portraitRotated = portrait;
         const total = portrait ? PORTRAIT_TOTAL : LANDSCAPE_TOTAL;
-        if (portrait) {
-          // Real notch/status-bar clearance: env() can't be read directly in
-          // JS, so insetProbe's computed padding reports the actual device
-          // pixel value (see its own comment above). Shrink the space we
-          // scale into by that amount, then shift the whole scaled
-          // container down by that same real amount so nothing ends up
-          // underneath it.
-          const inset = readInset();
-          // Fill the full device width exactly, edge to edge — no safety
-          // margin. PORTRAIT_TOTAL's height (see above) is deliberately
-          // sized close to a real phone's proportions at this scale (see
-          // style.css's portrait touch-controls comment), clearing both the
-          // status bar/notch (inset.top) AND the home-indicator bar on
-          // notched iPhones (inset.bottom) — on a real device without a
-          // touch-controls cutoff bug, that static budget alone is already
-          // enough. As a last-resort safety net for any device whose real
-          // insets turn out bigger than that budget assumed, clamp the
-          // scale down just enough to keep the whole container on-screen —
-          // trading a sliver of width match (still far better than before)
-          // for the controls never being cut off below the fold, which
-          // matters more.
-          let scale = window.innerWidth / total.w;
-          const overflow = inset.top + total.h * scale + inset.bottom - window.innerHeight;
-          if (overflow > 0) scale = (window.innerHeight - inset.top - inset.bottom) / total.h;
-          container.style.transform = `translate(0px, ${inset.top}px) scale(${scale})`;
-        } else {
-          // Landscape: unchanged fit-both-dimensions behavior, no notch
-          // compensation here (that's still handled by the #hud/joystick
-          // env(safe-area-inset-left) padding in style.css, same as before).
-          const scale = Math.min(window.innerWidth / total.w, window.innerHeight / total.h);
-          container.style.transform = `scale(${scale})`;
-        }
+        // Real notch/status-bar/home-indicator clearance: env() can't be
+        // read directly in JS, so insetProbe's computed padding reports the
+        // actual device pixel values (see its own comment above). Portrait:
+        // the notch/status bar runs along the TOP, the home indicator along
+        // the BOTTOM. Landscape: those same physical edges end up along the
+        // LEFT (whichever way the phone's held) and still the BOTTOM.
+        const inset = readInset();
+        const shiftTop = portrait ? inset.top : 0;
+        const shiftLeft = portrait ? 0 : inset.left;
+        // Fill the full available width exactly, edge to edge — no safety
+        // margin. PORTRAIT_TOTAL/LANDSCAPE_TOTAL's heights (see style.css)
+        // are deliberately sized close to a real phone's proportions at
+        // this scale, so on a real device that alone is already enough. As
+        // a last-resort safety net for any device whose real insets turn
+        // out bigger than that static budget assumed, clamp the scale down
+        // just enough to keep the whole container on-screen — trading a
+        // sliver of width match (still far better than no fill at all) for
+        // the controls never being cut off below the fold, which matters
+        // more.
+        let scale = (window.innerWidth - shiftLeft) / total.w;
+        const overflow = shiftTop + total.h * scale + inset.bottom - window.innerHeight;
+        if (overflow > 0) scale = (window.innerHeight - shiftTop - inset.bottom) / total.h;
+        container.style.transform = `translate(${shiftLeft}px, ${shiftTop}px) scale(${scale})`;
       } else {
         this.portraitRotated = portrait; // desktop-window-narrow fallback only (no touch UI involved)
         const scale = portrait
@@ -1719,6 +1710,10 @@ class Game {
     const bombType = THROWABLES[this.player.selectedThrowable];
     const bombCount = this.player.run.bombs[bombType.id] || 0;
     document.getElementById("bomb-label").textContent = `${bombType.name} x${bombCount}`;
+    // See Player.throwableArmed/updateAimAction (simulation.js): while armed,
+    // the aim trigger throws the selected explosive instead of firing the
+    // ranged weapon — tint the aim stick so that's obvious before pressing it.
+    document.getElementById("aim-stick-base").classList.toggle("armed", !!this.player.throwableArmed);
   }
 
   // Guest: no local simulation at all — just poll our own input and ship it

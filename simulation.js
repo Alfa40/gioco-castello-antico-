@@ -801,6 +801,13 @@ class Player {
     this._rangedMaxAmmo = null;
 
     this.selectedThrowable = 0;
+    // See selectBomb()/updateAimAction(): when armed, the next aim trigger
+    // throws the selected explosive once instead of firing the ranged
+    // weapon, then reverts — throwing (from either the aim trigger or the
+    // dedicated throw button) always clears it again (see throwBomb()).
+    this.throwableArmed = false;
+    this._aimWasActive = false; // edge-detects a fresh aim press, see update()
+    this.aimJustPressed = false;
 
     this.runStats = { kills: 0, moneyEarned: 0, killsByWeapon: {} };
 
@@ -953,6 +960,19 @@ class Player {
     this.fireRanged(sim, angle);
   }
 
+  // Called every tick in place of autoFireRanged (see Simulation.tick) —
+  // when a throwable is armed (see selectBomb), a fresh aim press throws it
+  // once instead of firing the ranged weapon, then throwBomb() clears the
+  // arm itself so the next press goes back to normal ranged auto-fire until
+  // the player re-selects a throwable.
+  updateAimAction(sim) {
+    if (this.throwableArmed) {
+      if (this.aimJustPressed) sim.throwBomb(this);
+      return;
+    }
+    this.autoFireRanged(sim);
+  }
+
   fireRanged(sim, angle) {
     this.rangedCooldownTimer = this.ranged.cooldown;
     this.ammo--;
@@ -1028,6 +1048,11 @@ class Player {
     // that's the direction you're walking. Manual fire (F key / R2
     // trigger, see tryRangedAttack) is unaffected either way.
     this.aimActive = !!stickAim;
+    // Rising edge only (stick just pushed, not held) — see
+    // updateAimAction(): a held stick must not spam-throw every tick once
+    // armed, only fire once per fresh press.
+    this.aimJustPressed = !!stickAim && !this._aimWasActive;
+    this._aimWasActive = !!stickAim;
 
     if (this.dashTimer > 0) {
       this.dashTimer -= dt;
@@ -1676,6 +1701,9 @@ class Simulation {
   selectBomb(value, absolute, actor = this.player) {
     const n = THROWABLES.length;
     actor.selectedThrowable = absolute ? value % n : (actor.selectedThrowable + value + n) % n;
+    // Arms the aim trigger to throw this instead of firing the ranged
+    // weapon — see Player.updateAimAction()/throwBomb().
+    actor.throwableArmed = true;
   }
 
   grenadeDamageForZone() {
@@ -1689,6 +1717,10 @@ class Simulation {
   }
 
   throwBomb(actor = this.player) {
+    // Cleared unconditionally on any throw attempt — whether triggered by
+    // the armed aim button or the dedicated throw button, and whether it
+    // actually succeeds below or not (see Player.updateAimAction()).
+    actor.throwableArmed = false;
     const type = THROWABLES[actor.selectedThrowable];
     if (!type) return;
     const count = actor.run.bombs[type.id] || 0;
@@ -2127,7 +2159,7 @@ class Simulation {
       if (input.gpAttack) this.player.tryAttack(this);
       if (input.gpRanged) this.player.tryRangedAttack(this);
       if (input.gpDash || input.touchDash) this.player.tryDash();
-      this.player.autoFireRanged(this);
+      this.player.updateAimAction(this);
       if (touchDevice) this.player.autoMeleeAttack(this);
     }
 
@@ -2135,7 +2167,7 @@ class Simulation {
       if (entry.player.hp <= 0 || entry.player.shopOpen) continue;
       entry.player.update(dt, entry.input);
       this.resolveObjectCollisions(entry.player);
-      entry.player.autoFireRanged(this);
+      entry.player.updateAimAction(this);
       if (entry.isTouchDevice) entry.player.autoMeleeAttack(this);
     }
 
