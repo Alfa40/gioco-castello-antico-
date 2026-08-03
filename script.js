@@ -721,8 +721,8 @@ class Game {
   setupResponsiveScaling() {
     const container = document.getElementById("game-container");
     // Must match the #game-container width/height in the corresponding CSS class.
-    const PORTRAIT_TOTAL = { w: 960, h: 2068 };
-    const LANDSCAPE_TOTAL = { w: 1600, h: 720 };
+    const PORTRAIT_TOTAL = { w: 960, h: 2098 };
+    const LANDSCAPE_TOTAL = { w: 1600, h: 750 };
 
     // env(safe-area-inset-*) is CSS-only — there's no JS API for the real
     // notch/status-bar size — so a hidden probe element with padding driven
