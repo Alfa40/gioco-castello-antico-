@@ -1459,15 +1459,15 @@ class Game {
 
   // Shared renderer for the sequential melee/ranged weapon tracks: only the
   // next tier is ever purchasable, earlier tiers show as owned, later ones
-  // as locked (behind a minimum zone reached this run, or behind fully
-  // upgrading the weapon currently in hand).
+  // as locked (behind fully upgrading the weapon currently in hand) — any
+  // player with enough money can buy the next weapon whenever they want, no
+  // zone requirement.
   renderWeaponList(containerId, weapons, currentTier, ownedUpgradeIds, onBuy) {
     const list = document.getElementById(containerId);
     list.innerHTML = "";
     weapons.forEach((weapon, idx) => {
       const owned = idx <= currentTier;
       const isNext = idx === currentTier + 1;
-      const zoneLocked = weapon.minZone && this.zone < weapon.minZone;
       const currentWeapon = weapons[currentTier];
       const upgradesComplete = allWeaponUpgradesOwned(currentWeapon, ownedUpgradeIds);
 
@@ -1480,15 +1480,13 @@ class Game {
         statusHtml = `<span class="level">Bloccata</span><button disabled>Compra prima l'arma precedente</button>`;
       } else if (!upgradesComplete) {
         statusHtml = `<span class="level">Bloccata</span><button disabled>Completa prima i potenziamenti di ${currentWeapon.name}</button>`;
-      } else if (zoneLocked) {
-        statusHtml = `<span class="level">Bloccata</span><button disabled>Si sblocca alla zona ${weapon.minZone}</button>`;
       } else {
         const affordable = weapon.cost <= this.player.run.money;
         statusHtml = `<span class="level">&nbsp;</span><button ${affordable ? "" : "disabled"}>Acquista — ${weapon.cost}€</button>`;
       }
 
       card.innerHTML = `<h3>${weapon.name}</h3><p>${weapon.desc}</p><div class="row">${statusHtml}</div>`;
-      if (isNext && !zoneLocked && upgradesComplete) {
+      if (isNext && upgradesComplete) {
         card.querySelector("button").addEventListener("click", () => onBuy(idx));
       }
       list.appendChild(card);
