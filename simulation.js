@@ -240,124 +240,125 @@ const MELEE_WEAPONS = [
   },
   {
     id: "knife1", name: "Coltello", desc: "Taglia in fretta: più danno e colpi più veloci.",
-    cost: 60, damage: 26, range: 50, cooldown: 0.32,
+    cost: 90, damage: 26, range: 50, cooldown: 0.32,
     upgrades: [
-      { id: "knife1_grip", name: "Impugnatura migliorata", desc: "Colpi leggermente più veloci.", cost: 20, cooldownMult: 0.94 },
-      { id: "knife1_blade", name: "Lama più affilata", desc: "Più danno per colpo.", cost: 25, damage: 4 },
-      { id: "knife1_pommel", name: "Pomello bilanciato", desc: "Colpi ancora più veloci.", cost: 20, cooldownMult: 0.94 },
-      { id: "knife1_edge", name: "Filo rifinito", desc: "Più danno per colpo.", cost: 25, damage: 4 },
-      { id: "knife1_reach", name: "Lama allungata", desc: "Colpisce leggermente più lontano.", cost: 20, range: 6 },
+      { id: "knife1_grip", name: "Impugnatura migliorata", desc: "Colpi leggermente più veloci.", cost: 30, cooldownMult: 0.94 },
+      { id: "knife1_blade", name: "Lama più affilata", desc: "Più danno per colpo.", cost: 38, damage: 4 },
+      { id: "knife1_pommel", name: "Pomello bilanciato", desc: "Colpi ancora più veloci.", cost: 30, cooldownMult: 0.94 },
+      { id: "knife1_edge", name: "Filo rifinito", desc: "Più danno per colpo.", cost: 38, damage: 4 },
+      { id: "knife1_reach", name: "Lama allungata", desc: "Colpisce leggermente più lontano.", cost: 30, range: 6 },
     ],
   },
   {
     id: "knife2", name: "Coltello a serramanico", desc: "Lama migliore: ancora più danno e velocità.",
-    cost: 140, damage: 36, range: 50, cooldown: 0.24,
+    cost: 210, damage: 36, range: 50, cooldown: 0.24,
     upgrades: [
-      { id: "knife2_grip", name: "Impugnatura rinforzata", desc: "Colpi ancora più veloci.", cost: 45, cooldownMult: 0.94 },
-      { id: "knife2_blade", name: "Lama temprata", desc: "Più danno per colpo.", cost: 55, damage: 6 },
-      { id: "knife2_pommel", name: "Pomello zavorrato", desc: "Colpi ancora più veloci.", cost: 45, cooldownMult: 0.94 },
-      { id: "knife2_edge", name: "Filo damascato", desc: "Più danno per colpo.", cost: 55, damage: 6 },
-      { id: "knife2_reach", name: "Lama allungata", desc: "Colpisce leggermente più lontano.", cost: 40, range: 6 },
+      { id: "knife2_grip", name: "Impugnatura rinforzata", desc: "Colpi ancora più veloci.", cost: 68, cooldownMult: 0.94 },
+      { id: "knife2_blade", name: "Lama temprata", desc: "Più danno per colpo.", cost: 82, damage: 6 },
+      { id: "knife2_pommel", name: "Pomello zavorrato", desc: "Colpi ancora più veloci.", cost: 68, cooldownMult: 0.94 },
+      { id: "knife2_edge", name: "Filo damascato", desc: "Più danno per colpo.", cost: 82, damage: 6 },
+      { id: "knife2_reach", name: "Lama allungata", desc: "Colpisce leggermente più lontano.", cost: 60, range: 6 },
     ],
   },
   {
     id: "bat", name: "Mazza da baseball", desc: "Più lenta, ma colpisce molto più lontano e più forte.",
-    cost: 260, damage: 50, range: 78, cooldown: 0.55,
+    cost: 390, damage: 50, range: 78, cooldown: 0.55,
     upgrades: [
-      { id: "bat_grip", name: "Impugnatura fasciata", desc: "Colpi leggermente più veloci.", cost: 70, cooldownMult: 0.95 },
-      { id: "bat_spikes", name: "Mazza chiodata", desc: "Chiodi che aumentano il danno.", cost: 90, damage: 10 },
-      { id: "bat_counterweight", name: "Contrappeso", desc: "Colpi leggermente più veloci.", cost: 70, cooldownMult: 0.95 },
-      { id: "bat_corked", name: "Corpo rinforzato", desc: "Più danno per colpo.", cost: 90, damage: 10 },
-      { id: "bat_handle", name: "Manico allungato", desc: "Colpisce leggermente più lontano.", cost: 70, range: 8 },
+      { id: "bat_grip", name: "Impugnatura fasciata", desc: "Colpi leggermente più veloci.", cost: 105, cooldownMult: 0.95 },
+      { id: "bat_spikes", name: "Mazza chiodata", desc: "Chiodi che aumentano il danno.", cost: 135, damage: 10 },
+      { id: "bat_counterweight", name: "Contrappeso", desc: "Colpi leggermente più veloci.", cost: 105, cooldownMult: 0.95 },
+      { id: "bat_corked", name: "Corpo rinforzato", desc: "Più danno per colpo.", cost: 135, damage: 10 },
+      { id: "bat_handle", name: "Manico allungato", desc: "Colpisce leggermente più lontano.", cost: 105, range: 8 },
     ],
   },
   {
     id: "pole", name: "Palo d'acciaio", desc: "Portata e danno massimi tra le lame e i pali. Non fa sconti.",
-    cost: 420, damage: 75, range: 94, cooldown: 0.6,
+    cost: 630, damage: 75, range: 94, cooldown: 0.6,
     upgrades: [
-      { id: "pole_grip", name: "Impugnatura antiscivolo", desc: "Colpi leggermente più veloci.", cost: 110, cooldownMult: 0.95 },
-      { id: "pole_reinforced", name: "Palo rinforzato", desc: "Struttura rinforzata: ancora più danno.", cost: 140, damage: 15 },
-      { id: "pole_counterweight", name: "Bilanciamento", desc: "Colpi leggermente più veloci.", cost: 110, cooldownMult: 0.95 },
-      { id: "pole_tempered", name: "Acciaio temprato", desc: "Più danno per colpo.", cost: 140, damage: 15 },
-      { id: "pole_extended", name: "Palo allungato", desc: "Colpisce leggermente più lontano.", cost: 110, range: 10 },
+      { id: "pole_grip", name: "Impugnatura antiscivolo", desc: "Colpi leggermente più veloci.", cost: 165, cooldownMult: 0.95 },
+      { id: "pole_reinforced", name: "Palo rinforzato", desc: "Struttura rinforzata: ancora più danno.", cost: 210, damage: 15 },
+      { id: "pole_counterweight", name: "Bilanciamento", desc: "Colpi leggermente più veloci.", cost: 165, cooldownMult: 0.95 },
+      { id: "pole_tempered", name: "Acciaio temprato", desc: "Più danno per colpo.", cost: 210, damage: 15 },
+      { id: "pole_extended", name: "Palo allungato", desc: "Colpisce leggermente più lontano.", cost: 165, range: 10 },
     ],
   },
   {
     id: "hammer", name: "Martello", desc: "Il colpo più pesante di tutti: lentissimo da rialzare, ma devastante.",
-    cost: 650, damage: 105, range: 86, cooldown: 0.78,
+    cost: 975, damage: 105, range: 86, cooldown: 0.78,
     upgrades: [
-      { id: "hammer_grip", name: "Manico ammortizzato", desc: "Colpi leggermente più veloci.", cost: 170, cooldownMult: 0.96 },
-      { id: "hammer_head", name: "Testa rinforzata", desc: "Testa più pesante: ancora più danno.", cost: 210, damage: 20 },
-      { id: "hammer_counterbalance", name: "Bilanciamento", desc: "Colpi leggermente più veloci.", cost: 170, cooldownMult: 0.96 },
-      { id: "hammer_forged", name: "Acciaio forgiato", desc: "Più danno per colpo.", cost: 210, damage: 20 },
-      { id: "hammer_handle", name: "Manico allungato", desc: "Colpisce leggermente più lontano.", cost: 170, range: 10 },
+      { id: "hammer_grip", name: "Manico ammortizzato", desc: "Colpi leggermente più veloci.", cost: 255, cooldownMult: 0.96 },
+      { id: "hammer_head", name: "Testa rinforzata", desc: "Testa più pesante: ancora più danno.", cost: 315, damage: 20 },
+      { id: "hammer_counterbalance", name: "Bilanciamento", desc: "Colpi leggermente più veloci.", cost: 255, cooldownMult: 0.96 },
+      { id: "hammer_forged", name: "Acciaio forgiato", desc: "Più danno per colpo.", cost: 315, damage: 20 },
+      { id: "hammer_handle", name: "Manico allungato", desc: "Colpisce leggermente più lontano.", cost: 255, range: 10 },
     ],
   },
 ];
 
-// Ranged weapons are a separate, optional loadout slot (key F) unlocked once
-// the current run has reached a deep enough zone. Also sequential, also
-// gated behind fully upgrading the current gun. Each has a capped ammo pool
-// (no unlimited spray) refilled by kills or the zone shop.
+// Ranged weapons are a separate, optional loadout slot (key F) — sequential
+// like melee (buying tier N+1 requires owning tier N fully upgraded first),
+// but purchasable any time the player can afford it, no zone requirement.
+// Each has a capped ammo pool (no unlimited spray) refilled by kills or the
+// zone shop.
 const RANGED_WEAPONS = [
   {
     id: "pistol", name: "Pistola", desc: "Colpisce a distanza. Cadenza moderata.",
-    cost: 220, damage: 22, cooldown: 0.6, projectileSpeed: 560, minZone: 12, maxAmmo: 24, costPerAmmo: 6,
+    cost: 330, damage: 22, cooldown: 0.6, projectileSpeed: 560, maxAmmo: 24, costPerAmmo: 6,
     upgrades: [
-      { id: "pistol_sight", name: "Mirino", desc: "Aggancia i bersagli con più margine.", cost: 80, aimConeBonus: 0.06 },
-      { id: "pistol_stock", name: "Calcio", desc: "Cadenza di fuoco più rapida.", cost: 90, cooldownMult: 0.9 },
-      { id: "pistol_barrel", name: "Canna lunga", desc: "Più danno per colpo.", cost: 100, damage: 5 },
-      { id: "pistol_mag", name: "Caricatore esteso", desc: "Più munizioni massime.", cost: 70, maxAmmo: 8 },
-      { id: "pistol_rifling", name: "Canna rigata", desc: "Ancora più danno per colpo.", cost: 90, damage: 4 },
+      { id: "pistol_sight", name: "Mirino", desc: "Aggancia i bersagli con più margine.", cost: 120, aimConeBonus: 0.06 },
+      { id: "pistol_stock", name: "Calcio", desc: "Cadenza di fuoco più rapida.", cost: 135, cooldownMult: 0.9 },
+      { id: "pistol_barrel", name: "Canna lunga", desc: "Più danno per colpo.", cost: 150, damage: 5 },
+      { id: "pistol_mag", name: "Caricatore esteso", desc: "Più munizioni massime.", cost: 105, maxAmmo: 8 },
+      { id: "pistol_rifling", name: "Canna rigata", desc: "Ancora più danno per colpo.", cost: 135, damage: 4 },
     ],
   },
   {
     id: "smg", name: "Mitra", desc: "Raffica rapida, danno per colpo minore.",
-    cost: 480, damage: 13, cooldown: 0.14, projectileSpeed: 640, minZone: 20, maxAmmo: 60, costPerAmmo: 4,
+    cost: 720, damage: 13, cooldown: 0.14, projectileSpeed: 640, maxAmmo: 60, costPerAmmo: 4,
     upgrades: [
-      { id: "smg_sight", name: "Mirino", desc: "Aggancia i bersagli con più margine.", cost: 150, aimConeBonus: 0.06 },
-      { id: "smg_stock", name: "Calcio", desc: "Cadenza di fuoco più rapida.", cost: 170, cooldownMult: 0.9 },
-      { id: "smg_barrel", name: "Canna lunga", desc: "Più danno per colpo.", cost: 190, damage: 3 },
-      { id: "smg_mag", name: "Caricatore esteso", desc: "Più munizioni massime.", cost: 140, maxAmmo: 15 },
-      { id: "smg_rifling", name: "Canna rigata", desc: "Ancora più danno per colpo.", cost: 160, damage: 3 },
+      { id: "smg_sight", name: "Mirino", desc: "Aggancia i bersagli con più margine.", cost: 225, aimConeBonus: 0.06 },
+      { id: "smg_stock", name: "Calcio", desc: "Cadenza di fuoco più rapida.", cost: 255, cooldownMult: 0.9 },
+      { id: "smg_barrel", name: "Canna lunga", desc: "Più danno per colpo.", cost: 285, damage: 3 },
+      { id: "smg_mag", name: "Caricatore esteso", desc: "Più munizioni massime.", cost: 210, maxAmmo: 15 },
+      { id: "smg_rifling", name: "Canna rigata", desc: "Ancora più danno per colpo.", cost: 240, damage: 3 },
     ],
   },
   {
     id: "sniper", name: "Cecchino", desc: "Un colpo lentissimo ma devastante: quasi sempre un one-shot.",
-    cost: 850, damage: 90, cooldown: 1.4, projectileSpeed: 900, minZone: 28, maxAmmo: 8, costPerAmmo: 25,
+    cost: 1275, damage: 90, cooldown: 1.4, projectileSpeed: 900, maxAmmo: 8, costPerAmmo: 25,
     upgrades: [
-      { id: "sniper_sight", name: "Mirino", desc: "Aggancia i bersagli con più margine.", cost: 220, aimConeBonus: 0.05 },
-      { id: "sniper_stock", name: "Calcio", desc: "Cadenza di fuoco più rapida.", cost: 260, cooldownMult: 0.88 },
-      { id: "sniper_barrel", name: "Canna lunga", desc: "Più danno per colpo.", cost: 300, damage: 20 },
-      { id: "sniper_mag", name: "Caricatore esteso", desc: "Più munizioni massime.", cost: 200, maxAmmo: 3 },
-      { id: "sniper_rifling", name: "Canna rigata", desc: "Ancora più danno per colpo.", cost: 260, damage: 15 },
+      { id: "sniper_sight", name: "Mirino", desc: "Aggancia i bersagli con più margine.", cost: 330, aimConeBonus: 0.05 },
+      { id: "sniper_stock", name: "Calcio", desc: "Cadenza di fuoco più rapida.", cost: 390, cooldownMult: 0.88 },
+      { id: "sniper_barrel", name: "Canna lunga", desc: "Più danno per colpo.", cost: 450, damage: 20 },
+      { id: "sniper_mag", name: "Caricatore esteso", desc: "Più munizioni massime.", cost: 300, maxAmmo: 3 },
+      { id: "sniper_rifling", name: "Canna rigata", desc: "Ancora più danno per colpo.", cost: 390, damage: 15 },
     ],
   },
   // Fires several pellets per colpo in un piccolo cono: `damage` è il danno
   // di ogni singolo pallino, non del colpo intero.
   {
     id: "shotgun", name: "Shotgun", desc: "Spara una rosa di pallini: devastante da vicino, un solo colpo per cartuccia.",
-    cost: 1300, damage: 14, cooldown: 0.9, projectileSpeed: 520, minZone: 36, maxAmmo: 20, costPerAmmo: 10,
+    cost: 1950, damage: 14, cooldown: 0.9, projectileSpeed: 520, maxAmmo: 20, costPerAmmo: 10,
     pellets: 6, spread: Math.PI / 9,
     upgrades: [
-      { id: "shotgun_sight", name: "Mirino", desc: "Aggancia i bersagli con più margine.", cost: 200, aimConeBonus: 0.06 },
-      { id: "shotgun_stock", name: "Calcio", desc: "Cadenza di fuoco più rapida.", cost: 220, cooldownMult: 0.9 },
-      { id: "shotgun_barrel", name: "Canna lunga", desc: "Più danno per pallino.", cost: 240, damage: 4 },
-      { id: "shotgun_mag", name: "Caricatore esteso", desc: "Più cartucce massime.", cost: 170, maxAmmo: 6 },
-      { id: "shotgun_rifling", name: "Canna rigata", desc: "Ancora più danno per pallino.", cost: 200, damage: 3 },
+      { id: "shotgun_sight", name: "Mirino", desc: "Aggancia i bersagli con più margine.", cost: 300, aimConeBonus: 0.06 },
+      { id: "shotgun_stock", name: "Calcio", desc: "Cadenza di fuoco più rapida.", cost: 330, cooldownMult: 0.9 },
+      { id: "shotgun_barrel", name: "Canna lunga", desc: "Più danno per pallino.", cost: 360, damage: 4 },
+      { id: "shotgun_mag", name: "Caricatore esteso", desc: "Più cartucce massime.", cost: 255, maxAmmo: 6 },
+      { id: "shotgun_rifling", name: "Canna rigata", desc: "Ancora più danno per pallino.", cost: 300, damage: 3 },
     ],
   },
   // splashRadius: al contatto esplode danneggiando tutti i nemici nel raggio.
   {
     id: "rocket", name: "Lanciarazzi", desc: "Razzo lento ma con danno ad area enorme: spazza via gruppi interi.",
-    cost: 2200, damage: 140, cooldown: 1.8, projectileSpeed: 380, minZone: 44, maxAmmo: 4, costPerAmmo: 60,
+    cost: 3300, damage: 140, cooldown: 1.8, projectileSpeed: 380, maxAmmo: 4, costPerAmmo: 60,
     splashRadius: 90,
     upgrades: [
-      { id: "rocket_sight", name: "Mirino", desc: "Aggancia i bersagli con più margine.", cost: 400, aimConeBonus: 0.08 },
-      { id: "rocket_stock", name: "Calcio", desc: "Cadenza di fuoco più rapida.", cost: 450, cooldownMult: 0.85 },
-      { id: "rocket_barrel", name: "Canna lunga", desc: "Più danno d'esplosione.", cost: 500, damage: 30 },
-      { id: "rocket_mag", name: "Caricatore esteso", desc: "Più razzi massimi.", cost: 350, maxAmmo: 2 },
-      { id: "rocket_rifling", name: "Canna rigata", desc: "Ancora più danno d'esplosione.", cost: 420, damage: 25 },
+      { id: "rocket_sight", name: "Mirino", desc: "Aggancia i bersagli con più margine.", cost: 600, aimConeBonus: 0.08 },
+      { id: "rocket_stock", name: "Calcio", desc: "Cadenza di fuoco più rapida.", cost: 675, cooldownMult: 0.85 },
+      { id: "rocket_barrel", name: "Canna lunga", desc: "Più danno d'esplosione.", cost: 750, damage: 30 },
+      { id: "rocket_mag", name: "Caricatore esteso", desc: "Più razzi massimi.", cost: 525, maxAmmo: 2 },
+      { id: "rocket_rifling", name: "Canna rigata", desc: "Ancora più danno d'esplosione.", cost: 630, damage: 25 },
     ],
   },
 ];
@@ -1927,7 +1928,6 @@ class Simulation {
     const run = player.run;
     const weapon = RANGED_WEAPONS[idx];
     if (!weapon || idx !== run.rangedTier + 1 || run.money < weapon.cost) return;
-    if (weapon.minZone && this.zone < weapon.minZone) return;
     if (run.rangedTier >= 0) {
       const current = RANGED_WEAPONS[run.rangedTier];
       if (!allWeaponUpgradesOwned(current, run.rangedWeaponUpgrades)) return;
