@@ -1,229 +1,210 @@
-// Crazy Town — multiplayer server.
+// Classifica globale di Quartiere Ostile 3D — API REST.
 //
-// Serves the game's static files AND a WebSocket endpoint (/ws) on the same
-// port. Every connected client (the room creator included — there is no
-// more "host browser" running the game for everyone) is a thin client: it
-// only ever sends its own input ("state"/"action" messages) and renders
-// whatever "snapshot" the server broadcasts. This server is the sole
-// simulation authority — see simulation.js, shared verbatim between here
-// (via require) and the browser (via a classic <script> tag), so both run
-// the exact same game logic. No player's own device ever simulates for
-// anyone but themselves in single-player/offline mode (see script.js).
+// Questo servizio Render (ex "crazy-town", il beat 'em up non più
+// utilizzato) è stato riconvertito in un semplice backend per la classifica
+// globale di Quartiere Ostile 3D: nessun file statico, nessun WebSocket,
+// solo due endpoint JSON che leggono/scrivono su Upstash Redis (via la sua
+// REST API, così non serve alcuna dipendenza npm aggiuntiva).
+//
+// Modello dati su Redis:
+//   - ZSET "leaderboard": member = player_id, score = zone*10_000_000+money
+//     (ordina prima per zona, poi per soldi come spareggio).
+//   - HASH "player:<player_id>": nickname, zone, money, updated.
 "use strict";
 
 const http = require("http");
-const fs = require("fs");
-const path = require("path");
-const crypto = require("crypto");
-const WebSocket = require("ws");
-const { Simulation, CONFIG } = require("./simulation.js");
 
 const PORT = process.env.PORT || 8080;
-const ROOT = __dirname;
-const MAX_PLAYERS = 4;
-const TICK_MS = 1000 / CONFIG.tickRate;
+const UPSTASH_URL = process.env.UPSTASH_REDIS_REST_URL;
+const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
 
-const MIME_TYPES = {
-  ".html": "text/html; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".js": "application/javascript; charset=utf-8",
-  ".json": "application/json; charset=utf-8",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".svg": "image/svg+xml",
-  ".ico": "image/x-icon",
-  ".webmanifest": "application/manifest+json",
-};
+const LEADERBOARD_KEY = "leaderboard";
+const DEFAULT_LIMIT = 50;
+const MAX_LIMIT = 100;
+const MAX_NICKNAME_LEN = 20;
+const MAX_PLAYER_ID_LEN = 64;
+const MONEY_SCORE_SPAN = 10000000;
 
-const server = http.createServer((req, res) => {
-  const urlPath = decodeURIComponent((req.url || "/").split("?")[0]);
-  const relative = urlPath === "/" ? "index.html" : urlPath.replace(/^\/+/, "");
-  const filePath = path.normalize(path.join(ROOT, relative));
+function corsHeaders() {
+  return {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+  };
+}
 
-  // Guard against path traversal escaping the project root.
-  if (!filePath.startsWith(ROOT)) {
-    res.writeHead(403);
-    res.end("Forbidden");
+function sendJson(res, status, payload) {
+  const body = JSON.stringify(payload);
+  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", ...corsHeaders() });
+  res.end(body);
+}
+
+async function upstash(command) {
+  if (!UPSTASH_URL || !UPSTASH_TOKEN) {
+    throw new Error("Upstash non configurato (UPSTASH_REDIS_REST_URL/TOKEN mancanti)");
+  }
+  const resp = await fetch(UPSTASH_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${UPSTASH_TOKEN}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(command),
+  });
+  const data = await resp.json();
+  if (data.error) {
+    throw new Error(`Upstash: ${data.error}`);
+  }
+  return data.result;
+}
+
+async function upstashPipeline(commands) {
+  if (!UPSTASH_URL || !UPSTASH_TOKEN) {
+    throw new Error("Upstash non configurato (UPSTASH_REDIS_REST_URL/TOKEN mancanti)");
+  }
+  const resp = await fetch(`${UPSTASH_URL}/pipeline`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${UPSTASH_TOKEN}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(commands),
+  });
+  const data = await resp.json();
+  return data.map((entry) => entry.result);
+}
+
+function hashArrayToObject(arr) {
+  const obj = {};
+  if (!Array.isArray(arr)) return obj;
+  for (let i = 0; i < arr.length; i += 2) {
+    obj[arr[i]] = arr[i + 1];
+  }
+  return obj;
+}
+
+function sanitizeNickname(raw) {
+  if (typeof raw !== "string") return "";
+  // Toglie i caratteri di controllo (codice < 32, o 127) un carattere alla
+  // volta, poi tronca alla lunghezza massima.
+  let cleaned = "";
+  for (const ch of raw) {
+    const code = ch.codePointAt(0);
+    if (code >= 32 && code !== 127) cleaned += ch;
+  }
+  return cleaned.trim().slice(0, MAX_NICKNAME_LEN);
+}
+
+function isValidPlayerId(id) {
+  return typeof id === "string" && id.length > 0 && id.length <= MAX_PLAYER_ID_LEN && /^[a-zA-Z0-9_-]+$/.test(id);
+}
+
+async function handleGetLeaderboard(req, res, url) {
+  let limit = parseInt(url.searchParams.get("limit"), 10);
+  if (!Number.isFinite(limit) || limit <= 0) limit = DEFAULT_LIMIT;
+  limit = Math.min(limit, MAX_LIMIT);
+
+  const ids = await upstash(["ZREVRANGE", LEADERBOARD_KEY, "0", String(limit - 1)]);
+  if (!Array.isArray(ids) || ids.length === 0) {
+    sendJson(res, 200, { entries: [] });
     return;
   }
 
-  fs.readFile(filePath, (err, data) => {
-    if (err) {
-      res.writeHead(404, { "Content-Type": "text/plain" });
-      res.end("Not found");
-      return;
-    }
-    const ext = path.extname(filePath).toLowerCase();
-    res.writeHead(200, { "Content-Type": MIME_TYPES[ext] || "application/octet-stream" });
-    res.end(data);
-  });
-});
-
-const wss = new WebSocket.Server({ server, path: "/ws" });
-
-// code -> { sockets: ws[] (index 0 is always the creator), sim: Simulation|null, tickTimer, started: bool }
-const rooms = new Map();
-
-function send(ws, obj) {
-  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+  const rows = await upstashPipeline(ids.map((id) => ["HGETALL", `player:${id}`]));
+  const entries = ids
+    .map((id, i) => {
+      const row = hashArrayToObject(rows[i]);
+      if (!row.nickname) return null;
+      return {
+        rank: i + 1,
+        nickname: row.nickname,
+        zone: parseInt(row.zone, 10) || 0,
+        money: parseInt(row.money, 10) || 0,
+      };
+    })
+    .filter((e) => e !== null);
+  sendJson(res, 200, { entries });
 }
 
-function broadcast(room, obj, exceptWs = null) {
-  for (const p of room.sockets) {
-    if (p !== exceptWs) send(p, obj);
+async function handleSubmit(req, res, body) {
+  const playerId = body.player_id;
+  const nickname = sanitizeNickname(body.nickname);
+  const zone = parseInt(body.zone, 10);
+  const money = parseInt(body.money, 10);
+
+  if (!isValidPlayerId(playerId) || nickname.length === 0 || !Number.isFinite(zone) || !Number.isFinite(money) || zone < 0 || money < 0) {
+    sendJson(res, 400, { error: "dati non validi" });
+    return;
   }
+
+  const score = zone * MONEY_SCORE_SPAN + Math.min(money, MONEY_SCORE_SPAN - 1);
+  await upstashPipeline([
+    ["HSET", `player:${playerId}`, "nickname", nickname, "zone", String(zone), "money", String(money), "updated", String(Date.now())],
+    ["ZADD", LEADERBOARD_KEY, String(score), playerId],
+  ]);
+  sendJson(res, 200, { ok: true });
 }
 
-function makeRoomCode() {
-  let code;
-  do {
-    code = String(Math.floor(1000 + Math.random() * 9000));
-  } while (rooms.has(code));
-  return code;
-}
-
-function makeId() {
-  return crypto.randomBytes(4).toString("hex");
-}
-
-// Starts (or restarts, on "Inizia"/"Continua" after a previous run ended)
-// the room's authoritative simulation and its fixed-rate tick loop. Only
-// the creator (sockets[0]) may trigger this — see the "startRun" handler.
-function startRoomRun(room) {
-  if (room.tickTimer) clearInterval(room.tickTimer);
-  room.sim = new Simulation();
-  room.sim.primaryId = room.sockets[0].id;
-  // Every OTHER already-connected socket becomes a remote participant —
-  // covers both "starting fresh with everyone already in the room" and
-  // "restarting after a game over while people are still connected".
-  for (const ws of room.sockets.slice(1)) {
-    room.sim.addRemotePlayer(ws.id, !!ws.isTouchDevice);
-  }
-  room.sim.startRun();
-  room.started = true;
-  room.tickTimer = setInterval(() => tickRoom(room), TICK_MS);
-}
-
-function tickRoom(room) {
-  if (!room.sim) return;
-  const now = Date.now();
-  const dt = Math.min(TICK_MS * 2, now - (room.lastTick || now)) / 1000;
-  room.lastTick = now;
-  room.sim.tick(dt);
-  const gameState = room.sim.gameOver ? "gameover" : "playing";
-  broadcast(room, { type: "snapshot", state: room.sim.toSnapshot(gameState) });
-  if (room.sim.gameOver) {
-    // The run is over — stop ticking (nothing left to simulate) until the
-    // creator starts a new one. Sockets stay in the room so "Nuova partita"
-    // doesn't require everyone to reconnect.
-    clearInterval(room.tickTimer);
-    room.tickTimer = null;
-  }
-}
-
-function leaveRoom(ws) {
-  if (!ws.room) return;
-  const room = rooms.get(ws.room);
-  if (!room) return;
-  // Nobody's own device was ever doing the simulation work, so a
-  // disconnect — creator or not — never has to pause or hand off anything
-  // for the players who stay: if the departing player happened to be the
-  // one mapped to sim.player, someone else who's still here just takes
-  // over that slot (see promoteRemoteToPrimary) so there's no ghost player
-  // left behind; everyone else's own state is untouched either way.
-  const wasPrimary = room.sim && room.sim.primaryId === ws.id;
-  room.sockets = room.sockets.filter(p => p !== ws);
-  if (room.sim) {
-    if (wasPrimary) {
-      const next = room.sockets[0];
-      if (next) room.sim.promoteRemoteToPrimary(next.id);
-    } else {
-      room.sim.removeRemotePlayer(ws.id);
-    }
-  }
-  if (room.sockets.length === 0) {
-    if (room.tickTimer) clearInterval(room.tickTimer);
-    rooms.delete(ws.room);
-  } else {
-    broadcast(room, { type: "peer-left", id: ws.id });
-  }
-  ws.room = null;
-}
-
-wss.on("connection", ws => {
-  ws.room = null;
-  ws.id = makeId();
-  ws.isTouchDevice = false;
-
-  ws.on("message", raw => {
-    let msg;
-    try {
-      msg = JSON.parse(raw);
-    } catch (e) {
-      return;
-    }
-
-    if (msg.type === "create") {
-      const code = makeRoomCode();
-      rooms.set(code, { sockets: [ws], sim: null, tickTimer: null, started: false, lastTick: 0 });
-      ws.room = code;
-      send(ws, { type: "created", code, id: ws.id });
-      return;
-    }
-
-    if (msg.type === "join") {
-      const code = String(msg.code || "").trim();
-      const room = rooms.get(code);
-      if (!room) {
-        send(ws, { type: "join-error", reason: "not-found" });
-        return;
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    let chunks = "";
+    req.on("data", (chunk) => {
+      chunks += chunk;
+      if (chunks.length > 10000) {
+        reject(new Error("body troppo grande"));
+        req.destroy();
       }
-      if (room.sockets.length >= MAX_PLAYERS) {
-        send(ws, { type: "join-error", reason: "full" });
-        return;
-      }
-      room.sockets.push(ws);
-      ws.room = code;
-      // Tell everyone already here about the newcomer BEFORE confirming the
-      // join to the newcomer itself (message-arrival order across sockets
-      // is otherwise not guaranteed).
-      broadcast(room, { type: "peer-joined", id: ws.id }, ws);
-      send(ws, { type: "joined", code, id: ws.id, hostId: room.sockets[0].id });
-      // Joining mid-run: add them to the live simulation right away so the
-      // very next tick already includes them, instead of waiting on their
-      // first "state" message.
-      if (room.sim) room.sim.addRemotePlayer(ws.id, false);
-      return;
-    }
-
-    const room = ws.room && rooms.get(ws.room);
-    if (!room) return;
-
-    if (msg.type === "startRun") {
-      // Only the creator can (re)start a run — mirrors the client UI, where
-      // only the creator's tab shows an enabled "Inizia"/"Continua" button.
-      if (room.sockets[0] !== ws) return;
-      startRoomRun(room);
-      return;
-    }
-
-    if (msg.type === "state") {
-      ws.isTouchDevice = !!msg.isTouchDevice;
-      if (room.sim) room.sim.applyRemoteState(Object.assign({}, msg, { from: ws.id }));
-      return;
-    }
-
-    if (msg.type === "action") {
-      if (room.sim) room.sim.applyRemoteAction(Object.assign({}, msg, { from: ws.id }));
-      return;
-    }
+    });
+    req.on("end", () => resolve(chunks));
+    req.on("error", reject);
   });
+}
 
-  ws.on("close", () => leaveRoom(ws));
-  ws.on("error", () => leaveRoom(ws));
+const server = http.createServer((req, res) => {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+
+  if (req.method === "OPTIONS") {
+    res.writeHead(204, corsHeaders());
+    res.end();
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/") {
+    res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8", ...corsHeaders() });
+    res.end("Quartiere Ostile 3D — API classifica globale");
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/leaderboard") {
+    handleGetLeaderboard(req, res, url).catch((err) => {
+      console.error(err);
+      sendJson(res, 500, { error: "errore interno" });
+    });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/leaderboard/submit") {
+    readBody(req)
+      .then((raw) => {
+        let body;
+        try {
+          body = JSON.parse(raw);
+        } catch {
+          sendJson(res, 400, { error: "JSON non valido" });
+          return;
+        }
+        return handleSubmit(req, res, body);
+      })
+      .catch((err) => {
+        console.error(err);
+        sendJson(res, 500, { error: "errore interno" });
+      });
+    return;
+  }
+
+  sendJson(res, 404, { error: "non trovato" });
 });
 
 server.listen(PORT, () => {
-  console.log(`Crazy Town server listening on http://localhost:${PORT}`);
+  console.log(`Classifica globale in ascolto sulla porta ${PORT}`);
 });

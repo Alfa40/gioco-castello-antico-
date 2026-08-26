@@ -2,12 +2,10 @@
   "name": "crazy-town",
   "version": "1.0.0",
   "private": true,
-  "description": "Crazy Town — beat 'em up top-down con supporto multiplayer via WebSocket",
+  "description": "API classifica globale di Quartiere Ostile 3D (ex server di Crazy Town, riconvertito)",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
-  "dependencies": {
-    "ws": "^8.18.0"
-  }
+  "dependencies": {}
 }
