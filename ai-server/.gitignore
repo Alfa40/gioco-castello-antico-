@@ -1,0 +1,13 @@
+# Pesante e riscaricabile: si copia a parte o si riscarica, non va versionato.
+models/
+outputs/
+ComfyUI/
+venv/
+*.safetensors
+*.ckpt
+*.pt
+*.gguf
+
+# Blender/OS
+*.blend1
+.DS_Store
