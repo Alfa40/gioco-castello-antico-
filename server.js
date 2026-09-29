@@ -13,7 +13,8 @@
 //
 // Classifica di Hustle Idle (stesso servizio, chiavi separate, ?game=hustle):
 //   - ZSET "hustle:leaderboard": member = player_id, score = fama*10 (intero)
-//   - HASH "hustle:player:<player_id>": nickname, fame, money, title, updated.
+//   - HASH "hustle:player:<player_id>": nickname, fame, money, title, logo, bizs, code, updated.
+//   - STRING "hustle:code:<CODICE>": player_id (codice amico di 6 caratteri, derivato dall'id).
 "use strict";
 
 const http = require("http");
@@ -31,6 +32,54 @@ const MONEY_SCORE_SPAN = 10000000;
 const HUSTLE_KEY = "hustle:leaderboard";
 const MAX_TITLE_LEN = 32;
 const MAX_FAME = 1e9;
+const MAX_FRIENDS = 50;
+const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+// Codice amico: 6 caratteri dai primi 30 bit dell'id (lo stesso calcolo è nel gioco).
+function friendCode(playerId) {
+  const n = parseInt(playerId.slice(0, 8), 16) >>> 2;
+  let code = "";
+  for (let i = 5; i >= 0; i--) code += CODE_ALPHABET[(n >>> (i * 5)) & 31];
+  return code;
+}
+
+function isValidCode(c) {
+  return typeof c === "string" && /^[A-HJ-NP-Z2-9]{6}$/.test(c);
+}
+
+// Logo: forma, colori, simbolo e iniziali, ricostruito campo per campo (niente dati estranei).
+function cleanLogo(raw) {
+  if (!raw || typeof raw !== "object") return "";
+  const hex = (v) => (typeof v === "string" && /^#[0-9a-fA-F]{6}$/.test(v) ? v : "#ff8a3d");
+  const shapes = ["cerchio", "scudo", "quadrato", "stella", "esagono"];
+  const logo = {
+    shape: shapes.includes(raw.shape) ? raw.shape : "cerchio",
+    bg: hex(raw.bg),
+    fg: hex(raw.fg),
+    symbol: sanitizeNickname(String(raw.symbol || "")).slice(0, 8),
+    text: sanitizeNickname(String(raw.text || "")).slice(0, 3),
+  };
+  return JSON.stringify(logo);
+}
+
+// Attività del giocatore (per mostrarle sulla mappa degli amici): lotto, tipo, livello.
+function cleanBizs(raw) {
+  if (!Array.isArray(raw)) return "[]";
+  const ok = (v) => typeof v === "string" && /^[a-z0-9_-]{1,20}$/.test(v);
+  const list = raw
+    .slice(0, 30)
+    .filter((b) => b && ok(b.lot) && ok(b.type))
+    .map((b) => ({ lot: b.lot, type: b.type, lvl: Math.max(0, Math.min(9, parseInt(b.lvl, 10) || 0)) }));
+  return JSON.stringify(list);
+}
+
+function parseJson(s, fallback) {
+  try {
+    return s ? JSON.parse(s) : fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 function corsHeaders() {
   return {
@@ -116,6 +165,7 @@ async function handleGetHustle(res, limit, playerId) {
     fame: parseFloat(row.fame) || 0,
     money: parseInt(row.money, 10) || 0,
     title: row.title || "",
+    logo: parseJson(row.logo, null),
   });
   const entries = list
     .map((id, i) => {
@@ -146,11 +196,47 @@ async function handleSubmitHustle(res, body) {
     return;
   }
   const f = Math.round(fame * 10) / 10;
+  const code = friendCode(playerId);
   await upstashPipeline([
-    ["HSET", `hustle:player:${playerId}`, "nickname", nickname, "fame", String(f), "money", String(money), "title", title, "updated", String(Date.now())],
+    ["HSET", `hustle:player:${playerId}`, "nickname", nickname, "fame", String(f), "money", String(money), "title", title,
+      "logo", cleanLogo(body.logo), "bizs", cleanBizs(body.bizs), "code", code, "updated", String(Date.now())],
     ["ZADD", HUSTLE_KEY, String(Math.round(f * 10)), playerId],
+    ["SET", `hustle:code:${code}`, playerId, "NX"],
   ]);
-  sendJson(res, 200, { ok: true });
+  sendJson(res, 200, { ok: true, code });
+}
+
+// Classifica tra amici: i codici amico passati (più il giocatore stesso), con logo e attività.
+async function handleFriends(res, url) {
+  const playerId = url.searchParams.get("player_id");
+  const codes = [...new Set((url.searchParams.get("codes") || "").split(",").map((c) => c.trim().toUpperCase()).filter(isValidCode))].slice(0, MAX_FRIENDS);
+  const ids = codes.length ? await upstashPipeline(codes.map((c) => ["GET", `hustle:code:${c}`])) : [];
+  const all = [...new Set([...(isValidPlayerId(playerId) ? [playerId] : []), ...ids.filter(isValidPlayerId)])];
+  if (!all.length) {
+    sendJson(res, 200, { entries: [], missing: codes });
+    return;
+  }
+  const rows = await upstashPipeline(all.map((id) => ["HGETALL", `hustle:player:${id}`]));
+  const entries = all
+    .map((id, i) => {
+      const row = hashArrayToObject(rows[i]);
+      if (!row.nickname) return null;
+      return {
+        nickname: row.nickname,
+        fame: parseFloat(row.fame) || 0,
+        money: parseInt(row.money, 10) || 0,
+        title: row.title || "",
+        logo: parseJson(row.logo, null),
+        bizs: parseJson(row.bizs, []),
+        code: row.code || friendCode(id),
+        me: id === playerId,
+      };
+    })
+    .filter((e) => e !== null)
+    .sort((a, b) => b.fame - a.fame)
+    .map((e, i) => ({ rank: i + 1, ...e }));
+  const missing = codes.filter((c, i) => !isValidPlayerId(ids[i]));
+  sendJson(res, 200, { entries, missing });
 }
 
 async function handleGetLeaderboard(req, res, url) {
@@ -230,6 +316,14 @@ const server = http.createServer((req, res) => {
   if (req.method === "GET" && url.pathname === "/") {
     res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8", ...corsHeaders() });
     res.end("Quartiere Ostile 3D + Hustle Idle — API classifica globale");
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/leaderboard/friends") {
+    handleFriends(res, url).catch((err) => {
+      console.error(err);
+      sendJson(res, 500, { error: "errore interno" });
+    });
     return;
   }
 
