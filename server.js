@@ -228,7 +228,10 @@ async function handleFriends(res, url) {
     sendJson(res, 200, { entries: [], missing: codes });
     return;
   }
-  const rows = await upstashPipeline(all.map((id) => ["HGETALL", `hustle:player:${id}`]));
+  const rows = await upstashPipeline([
+    ...all.map((id) => ["HGETALL", `hustle:player:${id}`]),
+    ...all.map((id) => ["GET", `hustle:seen:${id}`]),
+  ]);
   const entries = all
     .map((id, i) => {
       const row = hashArrayToObject(rows[i]);
@@ -241,6 +244,8 @@ async function handleFriends(res, url) {
         logo: parseJson(row.logo, null),
         bizs: parseJson(row.bizs, []),
         code: row.code || friendCode(id),
+        // sta giocando adesso (segnale ricevuto negli ultimi 3 minuti)
+        online: rows[all.length + i] !== null && rows[all.length + i] !== undefined,
         me: id === playerId,
       };
     })
@@ -249,6 +254,16 @@ async function handleFriends(res, url) {
     .map((e, i) => ({ rank: i + 1, ...e }));
   const missing = codes.filter((c, i) => !isValidPlayerId(ids[i]));
   sendJson(res, 200, { entries, missing });
+}
+
+// "Sto giocando": il gioco lo manda ogni minuto; la chiave scade da sola dopo 3 minuti.
+async function handlePing(res, body) {
+  if (!body || body.game !== "hustle" || !isValidPlayerId(body.player_id)) {
+    sendJson(res, 400, { error: "dati non validi" });
+    return;
+  }
+  await upstash(["SET", `hustle:seen:${body.player_id}`, "1", "EX", "180"]);
+  sendJson(res, 200, { ok: true });
 }
 
 async function handleGetLeaderboard(req, res, url) {
@@ -344,6 +359,25 @@ const server = http.createServer((req, res) => {
       console.error(err);
       sendJson(res, 500, { error: "errore interno" });
     });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/leaderboard/ping") {
+    readBody(req)
+      .then((raw) => {
+        let body;
+        try {
+          body = JSON.parse(raw);
+        } catch {
+          sendJson(res, 400, { error: "JSON non valido" });
+          return;
+        }
+        return handlePing(res, body);
+      })
+      .catch((err) => {
+        console.error(err);
+        sendJson(res, 500, { error: "errore interno" });
+      });
     return;
   }
 
