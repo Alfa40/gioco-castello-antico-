@@ -10,6 +10,10 @@
 //   - ZSET "leaderboard": member = player_id, score = zone*10_000_000+money
 //     (ordina prima per zona, poi per soldi come spareggio).
 //   - HASH "player:<player_id>": nickname, zone, money, updated.
+//
+// Classifica di Hustle Idle (stesso servizio, chiavi separate, ?game=hustle):
+//   - ZSET "hustle:leaderboard": member = player_id, score = fama*10 (intero)
+//   - HASH "hustle:player:<player_id>": nickname, fame, money, title, updated.
 "use strict";
 
 const http = require("http");
@@ -24,6 +28,9 @@ const MAX_LIMIT = 100;
 const MAX_NICKNAME_LEN = 20;
 const MAX_PLAYER_ID_LEN = 64;
 const MONEY_SCORE_SPAN = 10000000;
+const HUSTLE_KEY = "hustle:leaderboard";
+const MAX_TITLE_LEN = 32;
+const MAX_FAME = 1e9;
 
 function corsHeaders() {
   return {
@@ -99,10 +106,61 @@ function isValidPlayerId(id) {
   return typeof id === "string" && id.length > 0 && id.length <= MAX_PLAYER_ID_LEN && /^[a-zA-Z0-9_-]+$/.test(id);
 }
 
+async function handleGetHustle(res, limit, playerId) {
+  const ids = await upstash(["ZREVRANGE", HUSTLE_KEY, "0", String(limit - 1)]);
+  const list = Array.isArray(ids) ? ids : [];
+  const rows = list.length ? await upstashPipeline(list.map((id) => ["HGETALL", `hustle:player:${id}`])) : [];
+  const toEntry = (row, rank) => ({
+    rank,
+    nickname: row.nickname,
+    fame: parseFloat(row.fame) || 0,
+    money: parseInt(row.money, 10) || 0,
+    title: row.title || "",
+  });
+  const entries = list
+    .map((id, i) => {
+      const row = hashArrayToObject(rows[i]);
+      if (!row.nickname) return null;
+      return { ...toEntry(row, i + 1), me: id === playerId };
+    })
+    .filter((e) => e !== null);
+  // la posizione del giocatore anche se è fuori dai primi
+  let me = null;
+  if (isValidPlayerId(playerId)) {
+    const [pos, row] = await upstashPipeline([["ZREVRANK", HUSTLE_KEY, playerId], ["HGETALL", `hustle:player:${playerId}`]]);
+    const obj = hashArrayToObject(row);
+    if (pos !== null && pos !== undefined && obj.nickname) me = toEntry(obj, Number(pos) + 1);
+  }
+  const total = await upstash(["ZCARD", HUSTLE_KEY]);
+  sendJson(res, 200, { entries, me, total: Number(total) || 0 });
+}
+
+async function handleSubmitHustle(res, body) {
+  const playerId = body.player_id;
+  const nickname = sanitizeNickname(body.nickname);
+  const fame = Number(body.fame);
+  const money = parseInt(body.money, 10);
+  const title = sanitizeNickname(String(body.title || "")).slice(0, MAX_TITLE_LEN);
+  if (!isValidPlayerId(playerId) || nickname.length === 0 || !Number.isFinite(fame) || !Number.isFinite(money) || fame < 0 || fame > MAX_FAME || money < 0) {
+    sendJson(res, 400, { error: "dati non validi" });
+    return;
+  }
+  const f = Math.round(fame * 10) / 10;
+  await upstashPipeline([
+    ["HSET", `hustle:player:${playerId}`, "nickname", nickname, "fame", String(f), "money", String(money), "title", title, "updated", String(Date.now())],
+    ["ZADD", HUSTLE_KEY, String(Math.round(f * 10)), playerId],
+  ]);
+  sendJson(res, 200, { ok: true });
+}
+
 async function handleGetLeaderboard(req, res, url) {
   let limit = parseInt(url.searchParams.get("limit"), 10);
   if (!Number.isFinite(limit) || limit <= 0) limit = DEFAULT_LIMIT;
   limit = Math.min(limit, MAX_LIMIT);
+  if (url.searchParams.get("game") === "hustle") {
+    await handleGetHustle(res, limit, url.searchParams.get("player_id"));
+    return;
+  }
 
   const ids = await upstash(["ZREVRANGE", LEADERBOARD_KEY, "0", String(limit - 1)]);
   if (!Array.isArray(ids) || ids.length === 0) {
@@ -171,7 +229,7 @@ const server = http.createServer((req, res) => {
 
   if (req.method === "GET" && url.pathname === "/") {
     res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8", ...corsHeaders() });
-    res.end("Quartiere Ostile 3D — API classifica globale");
+    res.end("Quartiere Ostile 3D + Hustle Idle — API classifica globale");
     return;
   }
 
@@ -193,6 +251,7 @@ const server = http.createServer((req, res) => {
           sendJson(res, 400, { error: "JSON non valido" });
           return;
         }
+        if (body && body.game === "hustle") return handleSubmitHustle(res, body);
         return handleSubmit(req, res, body);
       })
       .catch((err) => {
