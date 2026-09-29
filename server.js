@@ -33,6 +33,7 @@ const HUSTLE_KEY = "hustle:leaderboard";
 const MAX_TITLE_LEN = 32;
 const MAX_FAME = 1e9;
 const MAX_FRIENDS = 50;
+const MAX_PHOTO_LEN = 40000;
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 // Codice amico: 6 caratteri dai primi 30 bit dell'id (lo stesso calcolo è nel gioco).
@@ -59,6 +60,10 @@ function cleanLogo(raw) {
     symbol: sanitizeNickname(String(raw.symbol || "")).slice(0, 8),
     text: sanitizeNickname(String(raw.text || "")).slice(0, 3),
   };
+  // foto del giocatore: solo JPEG piccolo (160×160); la vedono solo gli amici
+  if (typeof raw.photo === "string" && raw.photo.length <= MAX_PHOTO_LEN && /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(raw.photo)) {
+    logo.photo = raw.photo;
+  }
   return JSON.stringify(logo);
 }
 
@@ -71,6 +76,13 @@ function cleanBizs(raw) {
     .filter((b) => b && ok(b.lot) && ok(b.type))
     .map((b) => ({ lot: b.lot, type: b.type, lvl: Math.max(0, Math.min(9, parseInt(b.lvl, 10) || 0)) }));
   return JSON.stringify(list);
+}
+
+// Nella classifica mondiale (pubblica) niente foto: solo il logo disegnato.
+function publicLogo(logo) {
+  if (!logo || typeof logo !== "object") return null;
+  const { photo, ...rest } = logo;
+  return rest;
 }
 
 function parseJson(s, fallback) {
@@ -165,7 +177,7 @@ async function handleGetHustle(res, limit, playerId) {
     fame: parseFloat(row.fame) || 0,
     money: parseInt(row.money, 10) || 0,
     title: row.title || "",
-    logo: parseJson(row.logo, null),
+    logo: publicLogo(parseJson(row.logo, null)),
   });
   const entries = list
     .map((id, i) => {
@@ -294,7 +306,7 @@ function readBody(req) {
     let chunks = "";
     req.on("data", (chunk) => {
       chunks += chunk;
-      if (chunks.length > 10000) {
+      if (chunks.length > 60000) {
         reject(new Error("body troppo grande"));
         req.destroy();
       }
