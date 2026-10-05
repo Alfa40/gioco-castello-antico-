@@ -15,6 +15,9 @@
 //   - ZSET "hustle:leaderboard": member = player_id, score = fama*10 (intero)
 //   - HASH "hustle:player:<player_id>": nickname, fame, money, title, logo, bizs, code, updated.
 //   - STRING "hustle:code:<CODICE>": player_id (codice amico di 6 caratteri, derivato dall'id).
+//   - ZSET "hustle:lb:<money|jobs|biz|served>": altre classifiche (soldi guadagnati, lavoretti,
+//     attività aperte, clienti serviti); member = player_id.
+//   - SET "hustle:req:<player_id>": codici di chi gli ha chiesto l'amicizia (in attesa).
 "use strict";
 
 const http = require("http");
@@ -42,6 +45,21 @@ function friendCode(playerId) {
   let code = "";
   for (let i = 5; i >= 0; i--) code += CODE_ALPHABET[(n >>> (i * 5)) & 31];
   return code;
+}
+
+// Classifiche di Hustle Idle: la fama è la principale, le altre hanno una chiave ciascuna.
+const HUSTLE_KINDS = { fame: HUSTLE_KEY, money: "hustle:lb:money", jobs: "hustle:lb:jobs", biz: "hustle:lb:biz", served: "hustle:lb:served" };
+const MAX_REQUESTS = 100;
+
+// Statistiche principali della partita (per l'anteprima del profilo vista dagli amici): solo numeri.
+function cleanStats(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return "{}";
+  const out = {};
+  for (const [k, v] of Object.entries(raw).slice(0, 30)) {
+    const n = Number(v);
+    if (/^[a-zA-Z0-9_]{1,24}$/.test(k) && Number.isFinite(n)) out[k] = Math.max(-1e12, Math.min(1e12, Math.round(n * 100) / 100));
+  }
+  return JSON.stringify(out);
 }
 
 function isValidCode(c) {
@@ -167,15 +185,25 @@ function isValidPlayerId(id) {
   return typeof id === "string" && id.length > 0 && id.length <= MAX_PLAYER_ID_LEN && /^[a-zA-Z0-9_-]+$/.test(id);
 }
 
-async function handleGetHustle(res, limit, playerId) {
-  const ids = await upstash(["ZREVRANGE", HUSTLE_KEY, "0", String(limit - 1)]);
-  const list = Array.isArray(ids) ? ids : [];
+async function handleGetHustle(res, limit, playerId, kind) {
+  const key = HUSTLE_KINDS[kind] || HUSTLE_KEY;
+  const ids = await upstash(["ZREVRANGE", key, "0", String(limit - 1), "WITHSCORES"]);
+  const flat = Array.isArray(ids) ? ids : [];
+  const list = [];
+  const scores = [];
+  for (let i = 0; i < flat.length; i += 2) {
+    list.push(flat[i]);
+    scores.push(Number(flat[i + 1]) || 0);
+  }
   const rows = list.length ? await upstashPipeline(list.map((id) => ["HGETALL", `hustle:player:${id}`])) : [];
-  const toEntry = (row, rank) => ({
+  // valore della classifica scelta (la fama è salvata ×10)
+  const value = (score) => (key === HUSTLE_KEY ? score / 10 : score);
+  const toEntry = (row, rank, score) => ({
     rank,
     nickname: row.nickname,
     fame: parseFloat(row.fame) || 0,
     money: parseInt(row.money, 10) || 0,
+    value: value(score),
     title: row.title || "",
     logo: publicLogo(parseJson(row.logo, null)),
   });
@@ -183,17 +211,17 @@ async function handleGetHustle(res, limit, playerId) {
     .map((id, i) => {
       const row = hashArrayToObject(rows[i]);
       if (!row.nickname) return null;
-      return { ...toEntry(row, i + 1), me: id === playerId };
+      return { ...toEntry(row, i + 1, scores[i]), me: id === playerId };
     })
     .filter((e) => e !== null);
   // la posizione del giocatore anche se è fuori dai primi
   let me = null;
   if (isValidPlayerId(playerId)) {
-    const [pos, row] = await upstashPipeline([["ZREVRANK", HUSTLE_KEY, playerId], ["HGETALL", `hustle:player:${playerId}`]]);
+    const [pos, row, score] = await upstashPipeline([["ZREVRANK", key, playerId], ["HGETALL", `hustle:player:${playerId}`], ["ZSCORE", key, playerId]]);
     const obj = hashArrayToObject(row);
-    if (pos !== null && pos !== undefined && obj.nickname) me = toEntry(obj, Number(pos) + 1);
+    if (pos !== null && pos !== undefined && obj.nickname) me = toEntry(obj, Number(pos) + 1, Number(score) || 0);
   }
-  const total = await upstash(["ZCARD", HUSTLE_KEY]);
+  const total = await upstash(["ZCARD", key]);
   sendJson(res, 200, { entries, me, total: Number(total) || 0 });
 }
 
@@ -209,10 +237,18 @@ async function handleSubmitHustle(res, body) {
   }
   const f = Math.round(fame * 10) / 10;
   const code = friendCode(playerId);
+  const stats = cleanStats(body.stats);
+  const st = parseJson(stats, {});
+  const bizs = cleanBizs(body.bizs);
+  const num = (v) => String(Math.max(0, Math.floor(Number(v) || 0)));
   await upstashPipeline([
     ["HSET", `hustle:player:${playerId}`, "nickname", nickname, "fame", String(f), "money", String(money), "title", title,
-      "logo", cleanLogo(body.logo), "bizs", cleanBizs(body.bizs), "code", code, "updated", String(Date.now())],
+      "logo", cleanLogo(body.logo), "bizs", bizs, "stats", stats, "code", code, "updated", String(Date.now())],
     ["ZADD", HUSTLE_KEY, String(Math.round(f * 10)), playerId],
+    ["ZADD", HUSTLE_KINDS.money, num(money), playerId],
+    ["ZADD", HUSTLE_KINDS.jobs, num(st.jobs), playerId],
+    ["ZADD", HUSTLE_KINDS.biz, num(parseJson(bizs, []).length), playerId],
+    ["ZADD", HUSTLE_KINDS.served, num(st.served), playerId],
     ["SET", `hustle:code:${code}`, playerId, "NX"],
   ]);
   sendJson(res, 200, { ok: true, code });
@@ -243,6 +279,7 @@ async function handleFriends(res, url) {
         title: row.title || "",
         logo: parseJson(row.logo, null),
         bizs: parseJson(row.bizs, []),
+        stats: parseJson(row.stats, {}),
         code: row.code || friendCode(id),
         // sta giocando adesso (segnale ricevuto negli ultimi 3 minuti)
         online: rows[all.length + i] !== null && rows[all.length + i] !== undefined,
@@ -266,12 +303,65 @@ async function handlePing(res, body) {
   sendJson(res, 200, { ok: true });
 }
 
+// Richiesta di amicizia: chi aggiunge un codice lo segnala al proprietario, che può ricambiare con un tocco.
+async function handleFriendRequest(res, body) {
+  const code = String((body && body.code) || "").toUpperCase();
+  if (!body || body.game !== "hustle" || !isValidPlayerId(body.player_id) || !isValidCode(code)) {
+    sendJson(res, 400, { error: "dati non validi" });
+    return;
+  }
+  const from = friendCode(body.player_id);
+  const target = await upstash(["GET", `hustle:code:${code}`]);
+  if (!isValidPlayerId(target)) {
+    sendJson(res, 404, { error: "codice non trovato" });
+    return;
+  }
+  if (target === body.player_id) {
+    sendJson(res, 400, { error: "è il tuo codice" });
+    return;
+  }
+  const n = await upstash(["SCARD", `hustle:req:${target}`]);
+  if (Number(n) < MAX_REQUESTS) await upstash(["SADD", `hustle:req:${target}`, from]);
+  sendJson(res, 200, { ok: true });
+}
+
+// Richieste di amicizia ricevute, con nome, logo e fama di chi le ha mandate.
+async function handleFriendRequests(res, url) {
+  const playerId = url.searchParams.get("player_id");
+  if (url.searchParams.get("game") !== "hustle" || !isValidPlayerId(playerId)) {
+    sendJson(res, 400, { error: "dati non validi" });
+    return;
+  }
+  const codes = ((await upstash(["SMEMBERS", `hustle:req:${playerId}`])) || []).filter(isValidCode).slice(0, MAX_REQUESTS);
+  const ids = codes.length ? await upstashPipeline(codes.map((c) => ["GET", `hustle:code:${c}`])) : [];
+  const rows = ids.length ? await upstashPipeline(ids.map((id) => (isValidPlayerId(id) ? ["HGETALL", `hustle:player:${id}`] : ["GET", "hustle:none"]))) : [];
+  const requests = codes
+    .map((code, i) => {
+      const row = hashArrayToObject(rows[i]);
+      if (!row.nickname) return null;
+      return { code, nickname: row.nickname, fame: parseFloat(row.fame) || 0, title: row.title || "", logo: parseJson(row.logo, null) };
+    })
+    .filter((r) => r !== null);
+  sendJson(res, 200, { requests });
+}
+
+// Risposta a una richiesta (accettata o rifiutata): esce dalla lista. Accettando, il gioco aggiunge l'amico.
+async function handleFriendAnswer(res, body) {
+  const code = String((body && body.code) || "").toUpperCase();
+  if (!body || body.game !== "hustle" || !isValidPlayerId(body.player_id) || !isValidCode(code)) {
+    sendJson(res, 400, { error: "dati non validi" });
+    return;
+  }
+  await upstash(["SREM", `hustle:req:${body.player_id}`, code]);
+  sendJson(res, 200, { ok: true });
+}
+
 async function handleGetLeaderboard(req, res, url) {
   let limit = parseInt(url.searchParams.get("limit"), 10);
   if (!Number.isFinite(limit) || limit <= 0) limit = DEFAULT_LIMIT;
   limit = Math.min(limit, MAX_LIMIT);
   if (url.searchParams.get("game") === "hustle") {
-    await handleGetHustle(res, limit, url.searchParams.get("player_id"));
+    await handleGetHustle(res, limit, url.searchParams.get("player_id"), url.searchParams.get("kind"));
     return;
   }
 
@@ -351,6 +441,34 @@ const server = http.createServer((req, res) => {
       console.error(err);
       sendJson(res, 500, { error: "errore interno" });
     });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/leaderboard/friend-requests") {
+    handleFriendRequests(res, url).catch((err) => {
+      console.error(err);
+      sendJson(res, 500, { error: "errore interno" });
+    });
+    return;
+  }
+
+  // richieste di amicizia: invio e risposta (stessa lettura del corpo JSON)
+  if (req.method === "POST" && (url.pathname === "/leaderboard/friend-request" || url.pathname === "/leaderboard/friend-answer")) {
+    readBody(req)
+      .then((raw) => {
+        let body;
+        try {
+          body = JSON.parse(raw);
+        } catch {
+          sendJson(res, 400, { error: "JSON non valido" });
+          return;
+        }
+        return url.pathname === "/leaderboard/friend-request" ? handleFriendRequest(res, body) : handleFriendAnswer(res, body);
+      })
+      .catch((err) => {
+        console.error(err);
+        sendJson(res, 500, { error: "errore interno" });
+      });
     return;
   }
 
