@@ -18,6 +18,8 @@
 //   - ZSET "hustle:lb:<money|jobs|biz|served>": altre classifiche (soldi guadagnati, lavoretti,
 //     attività aperte, clienti serviti); member = player_id.
 //   - SET "hustle:req:<player_id>": codici di chi gli ha chiesto l'amicizia (in attesa).
+//   Account senza progressi da più di 30 giorni ("updated" vecchio): nascosti dalle classifiche
+//   (i dati restano; tornando a giocare ricompaiono). Da più di 90 giorni: cancellati.
 "use strict";
 
 const http = require("http");
@@ -185,9 +187,19 @@ function isValidPlayerId(id) {
   return typeof id === "string" && id.length > 0 && id.length <= MAX_PLAYER_ID_LEN && /^[a-zA-Z0-9_-]+$/.test(id);
 }
 
+// Account inattivi: senza progressi (nessun invio) da più di 30 giorni non compaiono in classifica.
+// I dati restano: appena il giocatore torna e il gioco invia di nuovo, ricompare da solo.
+const HUSTLE_INACTIVE_MS = 30 * 24 * 60 * 60 * 1000;
+const isActive = (row, now) => {
+  const t = Number(row.updated);
+  return !Number.isFinite(t) || t <= 0 || now - t < HUSTLE_INACTIVE_MS;
+};
+
 async function handleGetHustle(res, limit, playerId, kind) {
   const key = HUSTLE_KINDS[kind] || HUSTLE_KEY;
-  const ids = await upstash(["ZREVRANGE", key, "0", String(limit - 1), "WITHSCORES"]);
+  // se ne leggono di più: gli inattivi si saltano e la classifica resta piena
+  const fetchN = Math.min(limit * 3, 300);
+  const ids = await upstash(["ZREVRANGE", key, "0", String(fetchN - 1), "WITHSCORES"]);
   const flat = Array.isArray(ids) ? ids : [];
   const list = [];
   const scores = [];
@@ -207,22 +219,35 @@ async function handleGetHustle(res, limit, playerId, kind) {
     title: row.title || "",
     logo: publicLogo(parseJson(row.logo, null)),
   });
-  const entries = list
-    .map((id, i) => {
-      const row = hashArrayToObject(rows[i]);
-      if (!row.nickname) return null;
-      return { ...toEntry(row, i + 1, scores[i]), me: id === playerId };
-    })
-    .filter((e) => e !== null);
+  const now = Date.now();
+  const visible = [];
+  // quanti inattivi ci sono prima di ogni posizione (per la posizione del giocatore fuori dai primi)
+  let hiddenBefore = 0;
+  const hiddenAt = [];
+  list.forEach((id, i) => {
+    const row = hashArrayToObject(rows[i]);
+    hiddenAt.push(hiddenBefore);
+    // il giocatore vede sempre se stesso, anche se è fermo da tanto
+    if (!row.nickname || (id !== playerId && !isActive(row, now))) {
+      hiddenBefore++;
+      return;
+    }
+    visible.push({ id, row, score: scores[i] });
+  });
+  const entries = visible.slice(0, limit).map((v, i) => ({ ...toEntry(v.row, i + 1, v.score), me: v.id === playerId }));
   // la posizione del giocatore anche se è fuori dai primi
   let me = null;
   if (isValidPlayerId(playerId)) {
     const [pos, row, score] = await upstashPipeline([["ZREVRANK", key, playerId], ["HGETALL", `hustle:player:${playerId}`], ["ZSCORE", key, playerId]]);
     const obj = hashArrayToObject(row);
-    if (pos !== null && pos !== undefined && obj.nickname) me = toEntry(obj, Number(pos) + 1, Number(score) || 0);
+    if (pos !== null && pos !== undefined && obj.nickname) {
+      const p = Number(pos);
+      const skipped = p < hiddenAt.length ? hiddenAt[p] : hiddenBefore;
+      me = toEntry(obj, p + 1 - skipped, Number(score) || 0);
+    }
   }
-  const total = await upstash(["ZCARD", key]);
-  sendJson(res, 200, { entries, me, total: Number(total) || 0 });
+  const total = Number(await upstash(["ZCARD", key])) || 0;
+  sendJson(res, 200, { entries, me, total: list.length >= total ? visible.length : total - hiddenBefore });
 }
 
 async function handleSubmitHustle(res, body) {
@@ -522,35 +547,64 @@ const server = http.createServer((req, res) => {
   sendJson(res, 404, { error: "non trovato" });
 });
 
-// Pulizia una tantum di Hustle Idle: le partite di prova automatiche (nickname esattamente "Tester")
-// finite in classifica. Tocca solo chiavi "hustle:" (mai quelle di Quartiere Ostile / Magic Trip) e
-// gira una volta sola (la chiave "hustle:cleanup:testers:v1" lo ricorda).
-async function cleanupHustleTesters() {
-  if (!UPSTASH_URL || !UPSTASH_TOKEN) return;
-  const first = await upstash(["SET", "hustle:cleanup:testers:v1", String(Date.now()), "NX"]);
-  if (first !== "OK") return;
-  const keys = Object.values(HUSTLE_KINDS);
-  const lists = await upstashPipeline(keys.map((k) => ["ZRANGE", k, "0", "-1"]));
-  const ids = [...new Set(lists.flat().filter((id) => typeof id === "string" && isValidPlayerId(id)))];
+// Cancella del tutto alcuni giocatori di Hustle Idle: da tutte le classifiche, i loro dati, le richieste
+// di amicizia e il codice amico (solo se punta proprio a loro). Solo chiavi "hustle:".
+async function deleteHustlePlayers(ids) {
   if (!ids.length) return;
-  const rows = await upstashPipeline(ids.map((id) => ["HGET", `hustle:player:${id}`, "nickname"]));
-  const testers = ids.filter((_, i) => rows[i] === "Tester");
-  if (!testers.length) return;
+  const keys = Object.values(HUSTLE_KINDS);
   const cmds = [];
-  for (const id of testers) {
+  for (const id of ids) {
     for (const k of keys) cmds.push(["ZREM", k, id]);
     cmds.push(["DEL", `hustle:player:${id}`], ["DEL", `hustle:req:${id}`], ["DEL", `hustle:seen:${id}`]);
   }
   await upstashPipeline(cmds);
-  // il codice amico si toglie solo se punta proprio a quel giocatore
-  const codes = testers.map((id) => friendCode(id));
+  const codes = ids.map((id) => friendCode(id));
   const owners = await upstashPipeline(codes.map((c) => ["GET", `hustle:code:${c}`]));
-  const dels = codes.filter((c, i) => owners[i] === testers[i]).map((c) => ["DEL", `hustle:code:${c}`]);
+  const dels = codes.filter((c, i) => owners[i] === ids[i]).map((c) => ["DEL", `hustle:code:${c}`]);
   if (dels.length) await upstashPipeline(dels);
-  console.log(`Hustle Idle: tolti ${testers.length} giocatori di prova ("Tester") dalle classifiche`);
+}
+
+/** Tutti i giocatori di Hustle Idle in classifica, con i loro dati (nickname, updated…). */
+async function allHustlePlayers() {
+  const keys = Object.values(HUSTLE_KINDS);
+  const lists = await upstashPipeline(keys.map((k) => ["ZRANGE", k, "0", "-1"]));
+  const ids = [...new Set(lists.flat().filter((id) => isValidPlayerId(id)))];
+  if (!ids.length) return [];
+  const rows = await upstashPipeline(ids.map((id) => ["HGETALL", `hustle:player:${id}`]));
+  return ids.map((id, i) => ({ id, row: hashArrayToObject(rows[i]) }));
+}
+
+// Pulizia una tantum: le partite di prova automatiche (nickname esattamente "Tester") finite in
+// classifica. Gira una volta sola (la chiave "hustle:cleanup:testers:v1" lo ricorda).
+async function cleanupHustleTesters() {
+  if (!UPSTASH_URL || !UPSTASH_TOKEN) return;
+  const first = await upstash(["SET", "hustle:cleanup:testers:v1", String(Date.now()), "NX"]);
+  if (first !== "OK") return;
+  const testers = (await allHustlePlayers()).filter((p) => p.row.nickname === "Tester").map((p) => p.id);
+  await deleteHustlePlayers(testers);
+  if (testers.length) console.log(`Hustle Idle: tolti ${testers.length} giocatori di prova ("Tester") dalle classifiche`);
+}
+
+// Account fermi da più di 90 giorni (nessun progresso inviato): cancellati. Dai 30 giorni sono già
+// nascosti dalle classifiche (vedi isActive). Gira all'avvio e poi una volta al giorno.
+const HUSTLE_DELETE_MS = 90 * 24 * 60 * 60 * 1000;
+async function cleanupHustleInactive() {
+  if (!UPSTASH_URL || !UPSTASH_TOKEN) return;
+  const now = Date.now();
+  const old = (await allHustlePlayers())
+    .filter((p) => {
+      const t = Number(p.row.updated);
+      return Number.isFinite(t) && t > 0 && now - t > HUSTLE_DELETE_MS;
+    })
+    .map((p) => p.id);
+  await deleteHustlePlayers(old);
+  if (old.length) console.log(`Hustle Idle: cancellati ${old.length} account inattivi da più di 90 giorni`);
 }
 
 server.listen(PORT, () => {
   console.log(`Classifica globale in ascolto sulla porta ${PORT}`);
   cleanupHustleTesters().catch((err) => console.error("pulizia Tester:", err));
+  const inactive = () => cleanupHustleInactive().catch((err) => console.error("pulizia inattivi:", err));
+  inactive();
+  setInterval(inactive, 24 * 60 * 60 * 1000);
 });
