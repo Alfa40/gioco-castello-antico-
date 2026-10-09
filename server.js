@@ -522,6 +522,35 @@ const server = http.createServer((req, res) => {
   sendJson(res, 404, { error: "non trovato" });
 });
 
+// Pulizia una tantum di Hustle Idle: le partite di prova automatiche (nickname esattamente "Tester")
+// finite in classifica. Tocca solo chiavi "hustle:" (mai quelle di Quartiere Ostile / Magic Trip) e
+// gira una volta sola (la chiave "hustle:cleanup:testers:v1" lo ricorda).
+async function cleanupHustleTesters() {
+  if (!UPSTASH_URL || !UPSTASH_TOKEN) return;
+  const first = await upstash(["SET", "hustle:cleanup:testers:v1", String(Date.now()), "NX"]);
+  if (first !== "OK") return;
+  const keys = Object.values(HUSTLE_KINDS);
+  const lists = await upstashPipeline(keys.map((k) => ["ZRANGE", k, "0", "-1"]));
+  const ids = [...new Set(lists.flat().filter((id) => typeof id === "string" && isValidPlayerId(id)))];
+  if (!ids.length) return;
+  const rows = await upstashPipeline(ids.map((id) => ["HGET", `hustle:player:${id}`, "nickname"]));
+  const testers = ids.filter((_, i) => rows[i] === "Tester");
+  if (!testers.length) return;
+  const cmds = [];
+  for (const id of testers) {
+    for (const k of keys) cmds.push(["ZREM", k, id]);
+    cmds.push(["DEL", `hustle:player:${id}`], ["DEL", `hustle:req:${id}`], ["DEL", `hustle:seen:${id}`]);
+  }
+  await upstashPipeline(cmds);
+  // il codice amico si toglie solo se punta proprio a quel giocatore
+  const codes = testers.map((id) => friendCode(id));
+  const owners = await upstashPipeline(codes.map((c) => ["GET", `hustle:code:${c}`]));
+  const dels = codes.filter((c, i) => owners[i] === testers[i]).map((c) => ["DEL", `hustle:code:${c}`]);
+  if (dels.length) await upstashPipeline(dels);
+  console.log(`Hustle Idle: tolti ${testers.length} giocatori di prova ("Tester") dalle classifiche`);
+}
+
 server.listen(PORT, () => {
   console.log(`Classifica globale in ascolto sulla porta ${PORT}`);
+  cleanupHustleTesters().catch((err) => console.error("pulizia Tester:", err));
 });
