@@ -549,9 +549,15 @@ async function handlePropSend(res, body) {
 // sviluppatore: le proposte, dalla più recente
 async function handlePropList(res, body) {
   if (!isDevKey(body.key)) return sendJson(res, 403, { error: "solo lo sviluppatore" });
-  const ids = (await upstash(["ZREVRANGE", "hustle:props", "0", "99"])) || [];
+  const ids = (await upstash(["ZREVRANGE", "hustle:props", "0", String(PROP_KEEP - 1)])) || [];
   const rows = ids.length ? await upstashPipeline(ids.map((id) => ["HGETALL", `hustle:prop:${id}`])) : [];
-  const list = ids.map((id, i) => propOut(id, hashArrayToObject(rows[i]))).filter((p) => p.status);
+  // "player": inizio dell'id anonimo del telefono, per contare le proposte di ogni tester anche se cambia nome
+  const list = ids
+    .map((id, i) => {
+      const row = hashArrayToObject(rows[i]);
+      return { ...propOut(id, row), player: String(row.player || "").slice(0, 12) };
+    })
+    .filter((p) => p.status);
   sendJson(res, 200, { proposals: list });
 }
 
