@@ -453,11 +453,12 @@ function readBody(req, max = 60000) {
 // privata finché lo sviluppatore (partita developer) non la approva. Solo allora un workflow di GitHub
 // (chiave "robot") la trasforma in una issue e Claude ci lavora. Nessuna chiave in chiaro: solo le impronte
 // SHA-256 (il codice del gioco è pubblico, le chiavi no).
-//   - HASH "hustle:prop:<id>": status (nuova|approvata|scartata|importata), text, why, where, ctx, nickname,
+//   - HASH "hustle:prop:<id>": status (nuova|approvata|scartata|importata|rifiutata), text, why, where, ctx, nickname,
 //     player, created, decided, issue, photo ("1" se c'è la foto).
 //   - STRING "hustle:propimg:<id>": foto dello schermo (data URL JPEG).
 //   - ZSET "hustle:props": tutte le proposte (score = data di invio), le ultime PROP_KEEP.
 //   - SET "hustle:props:approved": approvate in attesa di diventare issue.
+//   - SET "hustle:props:toclose": rifiutate dopo l'anteprima, la cui issue il robot deve chiudere.
 //   - STRING "hustle:proprate:<player|all>:<giorno>": quante proposte inviate oggi.
 const crypto = require("crypto");
 const PROP_TESTER_HASHES = ["29fd6a5f47282398df31aa65c6a6b6fb3ebe6c5182ef93ddea156a7c9af9556a"];
@@ -541,7 +542,7 @@ async function handlePropSend(res, body) {
   // tiene solo le ultime PROP_KEEP (le più vecchie si cancellano)
   const old = await upstash(["ZRANGE", "hustle:props", "0", String(-PROP_KEEP - 1)]);
   if (Array.isArray(old) && old.length) {
-    await upstashPipeline([["ZREM", "hustle:props", ...old], ["SREM", "hustle:props:approved", ...old], ...old.flatMap((o) => [["DEL", `hustle:prop:${o}`], ["DEL", `hustle:propimg:${o}`]])]);
+    await upstashPipeline([["ZREM", "hustle:props", ...old], ["SREM", "hustle:props:approved", ...old], ["SREM", "hustle:props:toclose", ...old], ...old.flatMap((o) => [["DEL", `hustle:prop:${o}`], ["DEL", `hustle:propimg:${o}`]])]);
   }
   sendJson(res, 200, { ok: true, id: Number(id) });
 }
@@ -565,11 +566,23 @@ async function handlePropDecide(res, body) {
   if (!isDevKey(body.key)) return sendJson(res, 403, { error: "solo lo sviluppatore" });
   const id = String(parseInt(body.id, 10));
   const action = body.action;
-  if (!["approve", "reject", "reopen"].includes(action)) return sendJson(res, 400, { error: "azione non valida" });
+  if (!["approve", "reject", "reopen", "reject_preview"].includes(action)) return sendJson(res, 400, { error: "azione non valida" });
   const status = await upstash(["HGET", `hustle:prop:${id}`, "status"]);
   if (!status) return sendJson(res, 404, { error: "proposta non trovata" });
+  // anteprima provata e non piaciuta: rifiutata; il robot di GitHub chiude la issue
+  if (action === "reject_preview") {
+    if (status === "importata") {
+      await upstashPipeline([
+        ["HSET", `hustle:prop:${id}`, "status", "rifiutata", "decided", String(Date.now())],
+        ["SADD", "hustle:props:toclose", id],
+      ]);
+      return sendJson(res, 200, { ok: true, status: "rifiutata" });
+    }
+    if (status !== "approvata") return sendJson(res, 409, { error: "non è un'anteprima" });
+  }
   if (status === "importata") return sendJson(res, 409, { error: "già su GitHub" });
-  const next = action === "approve" ? "approvata" : action === "reject" ? "scartata" : "nuova";
+  if (status === "rifiutata") return sendJson(res, 409, { error: "già rifiutata" });
+  const next = action === "approve" ? "approvata" : action === "reopen" ? "nuova" : "scartata";
   await upstashPipeline([
     ["HSET", `hustle:prop:${id}`, "status", next, "decided", String(Date.now())],
     action === "approve" ? ["SADD", "hustle:props:approved", id] : ["SREM", "hustle:props:approved", id],
@@ -597,6 +610,20 @@ async function handlePropImported(res, body) {
   sendJson(res, 200, { ok: true });
 }
 
+// robot: le issue da chiudere (anteprime rifiutate) e la conferma dopo averle chiuse
+async function handlePropToClose(res, body) {
+  if (!keyIs(body.key, [PROP_ROBOT_HASH])) return sendJson(res, 403, { error: "chiave non valida" });
+  const ids = ((await upstash(["SMEMBERS", "hustle:props:toclose"])) || []).slice(0, 20);
+  const issues = ids.length ? await upstashPipeline(ids.map((id) => ["HGET", `hustle:prop:${id}`, "issue"])) : [];
+  sendJson(res, 200, { proposals: ids.map((id, i) => ({ id: Number(id), issue: Number(issues[i]) || 0 })) });
+}
+
+async function handlePropClosed(res, body) {
+  if (!keyIs(body.key, [PROP_ROBOT_HASH])) return sendJson(res, 403, { error: "chiave non valida" });
+  await upstash(["SREM", "hustle:props:toclose", String(parseInt(body.id, 10))]);
+  sendJson(res, 200, { ok: true });
+}
+
 // foto della proposta: pubblica solo dopo l'approvazione (serve nella issue), prima solo con la chiave developer
 async function handlePropPhoto(res, url, id) {
   const status = await upstash(["HGET", `hustle:prop:${id}`, "status"]);
@@ -615,6 +642,8 @@ const PROP_ROUTES = {
   "/hustle/proposals/decide": handlePropDecide,
   "/hustle/proposals/approved": handlePropApproved,
   "/hustle/proposals/imported": handlePropImported,
+  "/hustle/proposals/toclose": handlePropToClose,
+  "/hustle/proposals/closed": handlePropClosed,
 };
 
 const server = http.createServer((req, res) => {
