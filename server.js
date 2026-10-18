@@ -18,6 +18,7 @@
 //   - ZSET "hustle:lb:<money|jobs|biz|served>": altre classifiche (soldi guadagnati, lavoretti,
 //     attività aperte, clienti serviti); member = player_id.
 //   - SET "hustle:req:<player_id>": codici di chi gli ha chiesto l'amicizia (in attesa).
+//   Proposte dei tester (chiavi "hustle:prop…"): vedi la sezione più sotto.
 //   Account senza progressi da più di 30 giorni ("updated" vecchio): nascosti dalle classifiche
 //   (i dati restano; tornando a giocare ricompaiono). Da più di 90 giorni: cancellati.
 "use strict";
@@ -431,12 +432,12 @@ async function handleSubmit(req, res, body) {
   sendJson(res, 200, { ok: true });
 }
 
-function readBody(req) {
+function readBody(req, max = 60000) {
   return new Promise((resolve, reject) => {
     let chunks = "";
     req.on("data", (chunk) => {
       chunks += chunk;
-      if (chunks.length > 60000) {
+      if (chunks.length > max) {
         reject(new Error("body troppo grande"));
         req.destroy();
       }
@@ -445,6 +446,170 @@ function readBody(req) {
     req.on("error", reject);
   });
 }
+
+// ---------------- Hustle Idle: proposte dei tester ----------------
+//
+// I tester (link segreto nel gioco) scrivono una proposta di modifica dalle Opzioni: arriva qui e resta
+// privata finché lo sviluppatore (partita developer) non la approva. Solo allora un workflow di GitHub
+// (chiave "robot") la trasforma in una issue e Claude ci lavora. Nessuna chiave in chiaro: solo le impronte
+// SHA-256 (il codice del gioco è pubblico, le chiavi no).
+//   - HASH "hustle:prop:<id>": status (nuova|approvata|scartata|importata), text, why, where, ctx, nickname,
+//     player, created, decided, issue, photo ("1" se c'è la foto).
+//   - STRING "hustle:propimg:<id>": foto dello schermo (data URL JPEG).
+//   - ZSET "hustle:props": tutte le proposte (score = data di invio), le ultime PROP_KEEP.
+//   - SET "hustle:props:approved": approvate in attesa di diventare issue.
+//   - STRING "hustle:proprate:<player|all>:<giorno>": quante proposte inviate oggi.
+const crypto = require("crypto");
+const PROP_TESTER_HASHES = ["29fd6a5f47282398df31aa65c6a6b6fb3ebe6c5182ef93ddea156a7c9af9556a"];
+const PROP_DEV_HASH = "c9973361080da099481708145340d318dc2f5bb1b66009b5207ed4b7a6ee41a5";
+const PROP_ROBOT_HASH = "deb0fcb441319a779d444716293ac17896df82bde703b06b2feb847bec0e0d3c";
+const PROP_MAX_TEXT = 2000;
+const PROP_MAX_PHOTO = 400000;
+const PROP_PER_DAY = 15;
+const PROP_ALL_PER_DAY = 200;
+const PROP_KEEP = 300;
+const PROP_TTL = String(180 * 24 * 60 * 60);
+
+const sha256 = (s) => crypto.createHash("sha256").update(String(s)).digest("hex");
+const keyIs = (key, hashes) => typeof key === "string" && key.length <= 100 && hashes.includes(sha256(key.trim()));
+const isDevKey = (key) => keyIs(key, [PROP_DEV_HASH]);
+
+// testo libero: via i caratteri di controllo (tranne gli a capo), lunghezza massima
+function cleanText(raw, max = PROP_MAX_TEXT) {
+  if (typeof raw !== "string") return "";
+  let out = "";
+  for (const ch of raw) {
+    const c = ch.codePointAt(0);
+    if (c === 10 || (c >= 32 && c !== 127)) out += ch;
+  }
+  return out.trim().slice(0, max);
+}
+
+// contesto raccolto dal gioco (posto, versione, schermo): solo coppie brevi di testo o numeri
+function cleanCtx(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return "{}";
+  const out = {};
+  for (const [k, v] of Object.entries(raw).slice(0, 20)) {
+    if (!/^[a-zA-Z0-9_]{1,24}$/.test(k)) continue;
+    if (typeof v === "number" && Number.isFinite(v)) out[k] = v;
+    else if (typeof v === "string") out[k] = cleanText(v, 120);
+  }
+  return JSON.stringify(out);
+}
+
+function propOut(id, row) {
+  return {
+    id: Number(id),
+    status: row.status,
+    text: row.text || "",
+    why: row.why || "",
+    where: row.where || "",
+    ctx: parseJson(row.ctx, {}),
+    nickname: row.nickname || "",
+    created: Number(row.created) || 0,
+    decided: Number(row.decided) || 0,
+    issue: Number(row.issue) || 0,
+    photo: row.photo === "1",
+  };
+}
+
+async function handlePropSend(res, body) {
+  if (!keyIs(body.key, PROP_TESTER_HASHES) && !isDevKey(body.key)) return sendJson(res, 403, { error: "chiave tester non valida" });
+  const text = cleanText(body.text);
+  if (text.length < 3) return sendJson(res, 400, { error: "scrivi cosa vorresti cambiare" });
+  const player = isValidPlayerId(body.player_id) ? body.player_id : "anonimo";
+  const photo =
+    typeof body.photo === "string" && body.photo.length <= PROP_MAX_PHOTO && /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(body.photo) ? body.photo : "";
+  const dayKey = new Date().toISOString().slice(0, 10);
+  const [mine, all] = await upstashPipeline([
+    ["INCR", `hustle:proprate:${player}:${dayKey}`],
+    ["INCR", `hustle:proprate:all:${dayKey}`],
+    ["EXPIRE", `hustle:proprate:${player}:${dayKey}`, "172800"],
+    ["EXPIRE", `hustle:proprate:all:${dayKey}`, "172800"],
+  ]);
+  if (Number(mine) > PROP_PER_DAY || Number(all) > PROP_ALL_PER_DAY) return sendJson(res, 429, { error: "troppe proposte oggi, riprova domani" });
+  const id = String(await upstash(["INCR", "hustle:props:seq"]));
+  const now = Date.now();
+  const cmds = [
+    ["HSET", `hustle:prop:${id}`, "status", "nuova", "text", text, "why", cleanText(body.why), "where", cleanText(body.where, 200),
+      "ctx", cleanCtx(body.ctx), "nickname", sanitizeNickname(body.nickname) || "Tester", "player", player, "created", String(now), "photo", photo ? "1" : "0"],
+    ["EXPIRE", `hustle:prop:${id}`, PROP_TTL],
+    ["ZADD", "hustle:props", String(now), id],
+  ];
+  if (photo) cmds.push(["SET", `hustle:propimg:${id}`, photo, "EX", PROP_TTL]);
+  await upstashPipeline(cmds);
+  // tiene solo le ultime PROP_KEEP (le più vecchie si cancellano)
+  const old = await upstash(["ZRANGE", "hustle:props", "0", String(-PROP_KEEP - 1)]);
+  if (Array.isArray(old) && old.length) {
+    await upstashPipeline([["ZREM", "hustle:props", ...old], ["SREM", "hustle:props:approved", ...old], ...old.flatMap((o) => [["DEL", `hustle:prop:${o}`], ["DEL", `hustle:propimg:${o}`]])]);
+  }
+  sendJson(res, 200, { ok: true, id: Number(id) });
+}
+
+// sviluppatore: le proposte, dalla più recente
+async function handlePropList(res, body) {
+  if (!isDevKey(body.key)) return sendJson(res, 403, { error: "solo lo sviluppatore" });
+  const ids = (await upstash(["ZREVRANGE", "hustle:props", "0", "99"])) || [];
+  const rows = ids.length ? await upstashPipeline(ids.map((id) => ["HGETALL", `hustle:prop:${id}`])) : [];
+  const list = ids.map((id, i) => propOut(id, hashArrayToObject(rows[i]))).filter((p) => p.status);
+  sendJson(res, 200, { proposals: list });
+}
+
+async function handlePropDecide(res, body) {
+  if (!isDevKey(body.key)) return sendJson(res, 403, { error: "solo lo sviluppatore" });
+  const id = String(parseInt(body.id, 10));
+  const action = body.action;
+  if (!["approve", "reject", "reopen"].includes(action)) return sendJson(res, 400, { error: "azione non valida" });
+  const status = await upstash(["HGET", `hustle:prop:${id}`, "status"]);
+  if (!status) return sendJson(res, 404, { error: "proposta non trovata" });
+  if (status === "importata") return sendJson(res, 409, { error: "già su GitHub" });
+  const next = action === "approve" ? "approvata" : action === "reject" ? "scartata" : "nuova";
+  await upstashPipeline([
+    ["HSET", `hustle:prop:${id}`, "status", next, "decided", String(Date.now())],
+    action === "approve" ? ["SADD", "hustle:props:approved", id] : ["SREM", "hustle:props:approved", id],
+  ]);
+  sendJson(res, 200, { ok: true, status: next });
+}
+
+// robot di GitHub: le approvate da trasformare in issue, e la conferma dopo averla creata
+async function handlePropApproved(res, body) {
+  if (!keyIs(body.key, [PROP_ROBOT_HASH])) return sendJson(res, 403, { error: "chiave non valida" });
+  const ids = ((await upstash(["SMEMBERS", "hustle:props:approved"])) || []).slice(0, 10);
+  const rows = ids.length ? await upstashPipeline(ids.map((id) => ["HGETALL", `hustle:prop:${id}`])) : [];
+  const list = ids.map((id, i) => propOut(id, hashArrayToObject(rows[i]))).filter((p) => p.status === "approvata");
+  sendJson(res, 200, { proposals: list });
+}
+
+async function handlePropImported(res, body) {
+  if (!keyIs(body.key, [PROP_ROBOT_HASH])) return sendJson(res, 403, { error: "chiave non valida" });
+  const id = String(parseInt(body.id, 10));
+  const issue = String(parseInt(body.issue, 10) || 0);
+  await upstashPipeline([
+    ["HSET", `hustle:prop:${id}`, "status", "importata", "issue", issue],
+    ["SREM", "hustle:props:approved", id],
+  ]);
+  sendJson(res, 200, { ok: true });
+}
+
+// foto della proposta: pubblica solo dopo l'approvazione (serve nella issue), prima solo con la chiave developer
+async function handlePropPhoto(res, url, id) {
+  const status = await upstash(["HGET", `hustle:prop:${id}`, "status"]);
+  const open = status === "approvata" || status === "importata";
+  if (!status || (!open && !isDevKey(url.searchParams.get("k")))) return sendJson(res, 404, { error: "non trovata" });
+  const data = await upstash(["GET", `hustle:propimg:${id}`]);
+  if (typeof data !== "string" || !data.startsWith("data:image/jpeg;base64,")) return sendJson(res, 404, { error: "non trovata" });
+  const buf = Buffer.from(data.slice(23), "base64");
+  res.writeHead(200, { "Content-Type": "image/jpeg", "Cache-Control": open ? "public, max-age=86400" : "private, no-store", ...corsHeaders() });
+  res.end(buf);
+}
+
+const PROP_ROUTES = {
+  "/hustle/proposal": handlePropSend,
+  "/hustle/proposals/list": handlePropList,
+  "/hustle/proposals/decide": handlePropDecide,
+  "/hustle/proposals/approved": handlePropApproved,
+  "/hustle/proposals/imported": handlePropImported,
+};
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
@@ -458,6 +623,35 @@ const server = http.createServer((req, res) => {
   if (req.method === "GET" && url.pathname === "/") {
     res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8", ...corsHeaders() });
     res.end("Quartiere Ostile 3D + Hustle Idle — API classifica globale");
+    return;
+  }
+
+  // proposte dei tester di Hustle Idle (corpo più grande: c'è la foto dello schermo)
+  if (req.method === "POST" && PROP_ROUTES[url.pathname]) {
+    readBody(req, 500000)
+      .then((raw) => {
+        let body;
+        try {
+          body = JSON.parse(raw);
+        } catch {
+          sendJson(res, 400, { error: "JSON non valido" });
+          return;
+        }
+        return PROP_ROUTES[url.pathname](res, body || {});
+      })
+      .catch((err) => {
+        console.error(err);
+        if (!res.headersSent) sendJson(res, 500, { error: "errore interno" });
+      });
+    return;
+  }
+
+  const photo = req.method === "GET" && /^\/hustle\/proposal-photo\/(\d{1,9})\.jpg$/.exec(url.pathname);
+  if (photo) {
+    handlePropPhoto(res, url, photo[1]).catch((err) => {
+      console.error(err);
+      if (!res.headersSent) sendJson(res, 500, { error: "errore interno" });
+    });
     return;
   }
 
