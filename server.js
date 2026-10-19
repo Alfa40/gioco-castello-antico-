@@ -453,12 +453,13 @@ function readBody(req, max = 60000) {
 // privata finché lo sviluppatore (partita developer) non la approva. Solo allora un workflow di GitHub
 // (chiave "robot") la trasforma in una issue e Claude ci lavora. Nessuna chiave in chiaro: solo le impronte
 // SHA-256 (il codice del gioco è pubblico, le chiavi no).
-//   - HASH "hustle:prop:<id>": status (nuova|approvata|scartata|importata|rifiutata), text, why, where, ctx, nickname,
-//     player, created, decided, issue, photo ("1" se c'è la foto).
+//   - HASH "hustle:prop:<id>": status (nuova|approvata|scartata|importata|rifiutata|accettata|pubblicata), text, why,
+//     where, ctx, nickname, player, created, decided, issue, photo ("1" se c'è la foto), mergeError (unione non riuscita).
 //   - STRING "hustle:propimg:<id>": foto dello schermo (data URL JPEG).
 //   - ZSET "hustle:props": tutte le proposte (score = data di invio), le ultime PROP_KEEP.
 //   - SET "hustle:props:approved": approvate in attesa di diventare issue.
 //   - SET "hustle:props:toclose": rifiutate dopo l'anteprima, la cui issue il robot deve chiudere.
+//   - SET "hustle:props:tomerge": accettate dopo l'anteprima, che il robot deve unire al gioco e pubblicare.
 //   - STRING "hustle:proprate:<player|all>:<giorno>": quante proposte inviate oggi.
 const crypto = require("crypto");
 const PROP_TESTER_HASHES = ["29fd6a5f47282398df31aa65c6a6b6fb3ebe6c5182ef93ddea156a7c9af9556a"];
@@ -511,6 +512,7 @@ function propOut(id, row) {
     decided: Number(row.decided) || 0,
     issue: Number(row.issue) || 0,
     photo: row.photo === "1",
+    mergeError: row.mergeError || "",
   };
 }
 
@@ -542,7 +544,7 @@ async function handlePropSend(res, body) {
   // tiene solo le ultime PROP_KEEP (le più vecchie si cancellano)
   const old = await upstash(["ZRANGE", "hustle:props", "0", String(-PROP_KEEP - 1)]);
   if (Array.isArray(old) && old.length) {
-    await upstashPipeline([["ZREM", "hustle:props", ...old], ["SREM", "hustle:props:approved", ...old], ["SREM", "hustle:props:toclose", ...old], ...old.flatMap((o) => [["DEL", `hustle:prop:${o}`], ["DEL", `hustle:propimg:${o}`]])]);
+    await upstashPipeline([["ZREM", "hustle:props", ...old], ["SREM", "hustle:props:approved", ...old], ["SREM", "hustle:props:toclose", ...old], ["SREM", "hustle:props:tomerge", ...old], ...old.flatMap((o) => [["DEL", `hustle:prop:${o}`], ["DEL", `hustle:propimg:${o}`]])]);
   }
   sendJson(res, 200, { ok: true, id: Number(id) });
 }
@@ -566,15 +568,26 @@ async function handlePropDecide(res, body) {
   if (!isDevKey(body.key)) return sendJson(res, 403, { error: "solo lo sviluppatore" });
   const id = String(parseInt(body.id, 10));
   const action = body.action;
-  if (!["approve", "reject", "reopen", "reject_preview"].includes(action)) return sendJson(res, 400, { error: "azione non valida" });
+  if (!["approve", "reject", "reopen", "reject_preview", "accept_preview"].includes(action)) return sendJson(res, 400, { error: "azione non valida" });
   const status = await upstash(["HGET", `hustle:prop:${id}`, "status"]);
   if (!status) return sendJson(res, 404, { error: "proposta non trovata" });
+  // anteprima provata e piaciuta: accettata; il robot di GitHub unisce la modifica al gioco e la pubblica
+  if (action === "accept_preview") {
+    if (status === "accettata" || status === "pubblicata") return sendJson(res, 200, { ok: true, status });
+    if (status !== "importata") return sendJson(res, 409, { error: "non è un'anteprima da provare" });
+    await upstashPipeline([
+      ["HSET", `hustle:prop:${id}`, "status", "accettata", "decided", String(Date.now()), "mergeError", ""],
+      ["SADD", "hustle:props:tomerge", id],
+    ]);
+    return sendJson(res, 200, { ok: true, status: "accettata" });
+  }
   // anteprima provata e non piaciuta: rifiutata; il robot di GitHub chiude la issue
   if (action === "reject_preview") {
-    if (status === "importata") {
+    if (status === "importata" || status === "accettata") {
       await upstashPipeline([
         ["HSET", `hustle:prop:${id}`, "status", "rifiutata", "decided", String(Date.now())],
         ["SADD", "hustle:props:toclose", id],
+        ["SREM", "hustle:props:tomerge", id],
       ]);
       return sendJson(res, 200, { ok: true, status: "rifiutata" });
     }
@@ -582,6 +595,7 @@ async function handlePropDecide(res, body) {
   }
   if (status === "importata") return sendJson(res, 409, { error: "già su GitHub" });
   if (status === "rifiutata") return sendJson(res, 409, { error: "già rifiutata" });
+  if (status === "accettata" || status === "pubblicata") return sendJson(res, 409, { error: "già accettata" });
   const next = action === "approve" ? "approvata" : action === "reopen" ? "nuova" : "scartata";
   await upstashPipeline([
     ["HSET", `hustle:prop:${id}`, "status", next, "decided", String(Date.now())],
@@ -624,10 +638,30 @@ async function handlePropClosed(res, body) {
   sendJson(res, 200, { ok: true });
 }
 
+// robot: le anteprime accettate da unire al gioco, e l'esito dell'unione (ok, oppure errore e torna da provare)
+async function handlePropToMerge(res, body) {
+  if (!keyIs(body.key, [PROP_ROBOT_HASH])) return sendJson(res, 403, { error: "chiave non valida" });
+  const ids = ((await upstash(["SMEMBERS", "hustle:props:tomerge"])) || []).slice(0, 10);
+  const issues = ids.length ? await upstashPipeline(ids.map((id) => ["HGET", `hustle:prop:${id}`, "issue"])) : [];
+  sendJson(res, 200, { proposals: ids.map((id, i) => ({ id: Number(id), issue: Number(issues[i]) || 0 })) });
+}
+
+async function handlePropMerged(res, body) {
+  if (!keyIs(body.key, [PROP_ROBOT_HASH])) return sendJson(res, 403, { error: "chiave non valida" });
+  const id = String(parseInt(body.id, 10));
+  const ok = body.ok === true;
+  await upstashPipeline([
+    ["SREM", "hustle:props:tomerge", id],
+    ok ? ["HSET", `hustle:prop:${id}`, "status", "pubblicata", "mergeError", ""]
+      : ["HSET", `hustle:prop:${id}`, "status", "importata", "mergeError", cleanText(String(body.error || "unione non riuscita"), 200)],
+  ]);
+  sendJson(res, 200, { ok: true });
+}
+
 // foto della proposta: pubblica solo dopo l'approvazione (serve nella issue), prima solo con la chiave developer
 async function handlePropPhoto(res, url, id) {
   const status = await upstash(["HGET", `hustle:prop:${id}`, "status"]);
-  const open = status === "approvata" || status === "importata";
+  const open = ["approvata", "importata", "accettata", "pubblicata"].includes(status);
   if (!status || (!open && !isDevKey(url.searchParams.get("k")))) return sendJson(res, 404, { error: "non trovata" });
   const data = await upstash(["GET", `hustle:propimg:${id}`]);
   if (typeof data !== "string" || !data.startsWith("data:image/jpeg;base64,")) return sendJson(res, 404, { error: "non trovata" });
@@ -644,6 +678,8 @@ const PROP_ROUTES = {
   "/hustle/proposals/imported": handlePropImported,
   "/hustle/proposals/toclose": handlePropToClose,
   "/hustle/proposals/closed": handlePropClosed,
+  "/hustle/proposals/tomerge": handlePropToMerge,
+  "/hustle/proposals/merged": handlePropMerged,
 };
 
 const server = http.createServer((req, res) => {
