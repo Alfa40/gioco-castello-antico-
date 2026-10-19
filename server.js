@@ -728,6 +728,10 @@ const PROP_ROUTES = {
   "/hustle/proposals/merged": handlePropMerged,
 };
 
+// poker multigiocatore di Hustle Idle (hustle-poker.js): stesse regole di invio delle proposte
+const poker = require("./hustle-poker")({ upstash, upstashPipeline, sendJson, isValidPlayerId, cleanText });
+Object.assign(PROP_ROUTES, poker.routes);
+
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
@@ -743,7 +747,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // proposte dei tester di Hustle Idle (corpo più grande: c'è la foto dello schermo)
+  // proposte dei tester di Hustle Idle (corpo più grande: c'è la foto dello schermo) e poker
   if (req.method === "POST" && PROP_ROUTES[url.pathname]) {
     readBody(req, 500000)
       .then((raw) => {
