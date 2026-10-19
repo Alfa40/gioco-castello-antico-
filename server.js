@@ -461,6 +461,8 @@ function readBody(req, max = 60000) {
 //   - SET "hustle:props:toclose": rifiutate dopo l'anteprima, la cui issue il robot deve chiudere.
 //   - SET "hustle:props:tomerge": accettate dopo l'anteprima, che il robot deve unire al gioco e pubblicare.
 //   - STRING "hustle:proprate:<player|all>:<giorno>": quante proposte inviate oggi.
+//   - HASH "hustle:propvote:<id>": voti dei tester sull'anteprima (campo = id del telefono, valore = JSON
+//     {n: nome, v: "si"|"no", c: commento, t: quando}). Sono un parere: decide sempre lo sviluppatore.
 const crypto = require("crypto");
 const PROP_TESTER_HASHES = ["29fd6a5f47282398df31aa65c6a6b6fb3ebe6c5182ef93ddea156a7c9af9556a"];
 const PROP_DEV_HASH = "c9973361080da099481708145340d318dc2f5bb1b66009b5207ed4b7a6ee41a5";
@@ -471,6 +473,8 @@ const PROP_PER_DAY = 15;
 const PROP_ALL_PER_DAY = 200;
 const PROP_KEEP = 300;
 const PROP_TTL = String(180 * 24 * 60 * 60);
+const PROP_MAX_COMMENT = 500;
+const PROP_MAX_VOTES = 60;
 
 const sha256 = (s) => crypto.createHash("sha256").update(String(s)).digest("hex");
 const keyIs = (key, hashes) => typeof key === "string" && key.length <= 100 && hashes.includes(sha256(key.trim()));
@@ -544,24 +548,64 @@ async function handlePropSend(res, body) {
   // tiene solo le ultime PROP_KEEP (le più vecchie si cancellano)
   const old = await upstash(["ZRANGE", "hustle:props", "0", String(-PROP_KEEP - 1)]);
   if (Array.isArray(old) && old.length) {
-    await upstashPipeline([["ZREM", "hustle:props", ...old], ["SREM", "hustle:props:approved", ...old], ["SREM", "hustle:props:toclose", ...old], ["SREM", "hustle:props:tomerge", ...old], ...old.flatMap((o) => [["DEL", `hustle:prop:${o}`], ["DEL", `hustle:propimg:${o}`]])]);
+    await upstashPipeline([["ZREM", "hustle:props", ...old], ["SREM", "hustle:props:approved", ...old], ["SREM", "hustle:props:toclose", ...old], ["SREM", "hustle:props:tomerge", ...old], ...old.flatMap((o) => [["DEL", `hustle:prop:${o}`], ["DEL", `hustle:propimg:${o}`], ["DEL", `hustle:propvote:${o}`]])]);
   }
   sendJson(res, 200, { ok: true, id: Number(id) });
 }
 
 // sviluppatore: le proposte, dalla più recente
+// tutte le proposte tenute, con i voti dei tester sulle anteprime
+async function propRows() {
+  const ids = (await upstash(["ZREVRANGE", "hustle:props", "0", String(PROP_KEEP - 1)])) || [];
+  const rows = ids.length ? await upstashPipeline(ids.flatMap((id) => [["HGETALL", `hustle:prop:${id}`], ["HGETALL", `hustle:propvote:${id}`]])) : [];
+  return ids
+    .map((id, i) => {
+      const votes = Object.entries(hashArrayToObject(rows[i * 2 + 1]))
+        .map(([player, raw]) => ({ player, ...parseJson(raw, {}) }))
+        .filter((v) => v.v === "si" || v.v === "no")
+        .sort((a, b) => (Number(b.t) || 0) - (Number(a.t) || 0));
+      return { id, row: hashArrayToObject(rows[i * 2]), votes };
+    })
+    .filter((p) => p.row.status);
+}
+const voteOut = (v, me) => ({ name: v.n || "", vote: v.v, comment: v.c || "", at: Number(v.t) || 0, ...(me !== undefined ? { mine: v.player === me } : {}) });
+
 async function handlePropList(res, body) {
   if (!isDevKey(body.key)) return sendJson(res, 403, { error: "solo lo sviluppatore" });
-  const ids = (await upstash(["ZREVRANGE", "hustle:props", "0", String(PROP_KEEP - 1)])) || [];
-  const rows = ids.length ? await upstashPipeline(ids.map((id) => ["HGETALL", `hustle:prop:${id}`])) : [];
   // "player": inizio dell'id anonimo del telefono, per contare le proposte di ogni tester anche se cambia nome
-  const list = ids
-    .map((id, i) => {
-      const row = hashArrayToObject(rows[i]);
-      return { ...propOut(id, row), player: String(row.player || "").slice(0, 12) };
-    })
-    .filter((p) => p.status);
+  const list = (await propRows()).map(({ id, row, votes }) => ({ ...propOut(id, row), player: String(row.player || "").slice(0, 12), votes: votes.map((v) => voteOut(v)) }));
   sendJson(res, 200, { proposals: list });
+}
+
+// app dei tester: le proposte già lette dallo sviluppatore (non le nuove), senza foto, perché e dettagli del
+// telefono; al posto dell'id del telefono un'impronta, per raggruppare le proposte di ogni tester
+async function handlePropBoard(res, body) {
+  if (!keyIs(body.key, PROP_TESTER_HASHES) && !isDevKey(body.key)) return sendJson(res, 403, { error: "chiave tester non valida" });
+  const me = isValidPlayerId(body.player_id) ? body.player_id : "";
+  const list = (await propRows())
+    .filter(({ row }) => row.status !== "nuova")
+    .map(({ id, row, votes }) => ({
+      id: Number(id), status: row.status, text: row.text || "", nickname: row.nickname || "", created: Number(row.created) || 0,
+      issue: Number(row.issue) || 0, mergeError: row.mergeError || "", player: sha256("hustle-tester:" + (row.player || "")).slice(0, 12),
+      votes: votes.map((v) => voteOut(v, me)),
+    }));
+  sendJson(res, 200, { proposals: list });
+}
+
+// voto di un tester su un'anteprima da provare: approvo / boccio, con un commento (si può cambiare)
+async function handlePropVote(res, body) {
+  if (!keyIs(body.key, PROP_TESTER_HASHES) && !isDevKey(body.key)) return sendJson(res, 403, { error: "chiave tester non valida" });
+  if (!isValidPlayerId(body.player_id)) return sendJson(res, 400, { error: "telefono non valido" });
+  if (body.vote !== "si" && body.vote !== "no") return sendJson(res, 400, { error: "voto non valido" });
+  const id = String(parseInt(body.id, 10));
+  const key = `hustle:propvote:${id}`;
+  const [status, has, count] = await upstashPipeline([["HGET", `hustle:prop:${id}`, "status"], ["HEXISTS", key, body.player_id], ["HLEN", key]]);
+  if (!status) return sendJson(res, 404, { error: "proposta non trovata" });
+  if (status !== "importata") return sendJson(res, 409, { error: "questa anteprima non si può più votare" });
+  if (!Number(has) && Number(count) >= PROP_MAX_VOTES) return sendJson(res, 429, { error: "troppi voti su questa anteprima" });
+  const vote = { n: cleanText(body.nickname, 40) || "Tester", v: body.vote, c: cleanText(body.comment, PROP_MAX_COMMENT), t: Date.now() };
+  await upstashPipeline([["HSET", key, body.player_id, JSON.stringify(vote)], ["EXPIRE", key, PROP_TTL]]);
+  sendJson(res, 200, { ok: true });
 }
 
 async function handlePropDecide(res, body) {
@@ -673,6 +717,8 @@ async function handlePropPhoto(res, url, id) {
 const PROP_ROUTES = {
   "/hustle/proposal": handlePropSend,
   "/hustle/proposals/list": handlePropList,
+  "/hustle/proposals/board": handlePropBoard,
+  "/hustle/proposals/vote": handlePropVote,
   "/hustle/proposals/decide": handlePropDecide,
   "/hustle/proposals/approved": handlePropApproved,
   "/hustle/proposals/imported": handlePropImported,
