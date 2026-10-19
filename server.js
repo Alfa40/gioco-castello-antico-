@@ -729,8 +729,13 @@ const PROP_ROUTES = {
 };
 
 // poker multigiocatore di Hustle Idle (hustle-poker.js): stesse regole di invio delle proposte
-const poker = require("./hustle-poker")({ upstash, upstashPipeline, sendJson, isValidPlayerId, cleanText });
-Object.assign(PROP_ROUTES, poker.routes);
+// e blackjack contro il banco (hustle-blackjack.js); un tavolo alla volta tra i due giochi (`tables`)
+const casinoTables = {};
+const poker = require("./hustle-poker")({ upstash, upstashPipeline, sendJson, isValidPlayerId, cleanText, tables: casinoTables });
+const blackjack = require("./hustle-blackjack")({ upstash, upstashPipeline, sendJson, isValidPlayerId, cleanText, tables: casinoTables });
+casinoTables.poker = poker.seatedCode;
+casinoTables.bj = blackjack.seatedCode;
+Object.assign(PROP_ROUTES, poker.routes, blackjack.routes);
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);

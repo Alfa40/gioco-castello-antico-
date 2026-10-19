@@ -37,7 +37,7 @@ const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const RANKS = "23456789TJQKA";
 const SUITS = "shdc";
 
-module.exports = function pokerRoutes({ upstash, upstashPipeline, sendJson, isValidPlayerId, cleanText }) {
+module.exports = function pokerRoutes({ upstash, upstashPipeline, sendJson, isValidPlayerId, cleanText, tables = {} }) {
   const rooms = new Map();
   const queues = new Map();
 
@@ -514,6 +514,8 @@ module.exports = function pokerRoutes({ upstash, upstashPipeline, sendJson, isVa
     if (!(buy >= bb * MIN_BUY_BB && buy <= bb * MAX_BUY_BB)) return sendJson(res, 400, { error: "fiches non valide" });
     const at = await upstash(["GET", `hustle:poker:at:${body.player_id}`]);
     if (at && (await loadRoom(at)) && !rooms.get(at).closed) return sendJson(res, 409, { error: "sei già seduto a un altro tavolo", code: at });
+    const bj = tables.bj ? await tables.bj(body.player_id) : null;
+    if (bj) return sendJson(res, 409, { error: "sei già seduto a un tavolo di blackjack", code: bj, game: "bj" });
     const code = await newCode();
     const now = Date.now();
     const room = { code, v: 1, sb, bb, fame, minBuy: bb * MIN_BUY_BB, maxBuy: bb * MAX_BUY_BB, created: now, seats: Array(MAX_SEATS).fill(null), button: -1, hand: null, result: null, nextHandAt: 0, log: [], started: false, closed: null };
@@ -552,6 +554,8 @@ module.exports = function pokerRoutes({ upstash, upstashPipeline, sendJson, isVa
       if (!validSlot(body.slot)) return sendJson(res, 400, { error: "partita non valida" });
       const at = await upstash(["GET", `hustle:poker:at:${body.player_id}`]);
       if (at && at !== code && (await loadRoom(at)) && !rooms.get(at).closed) return sendJson(res, 409, { error: "sei già seduto a un altro tavolo", code: at });
+      const bj = tables.bj ? await tables.bj(body.player_id) : null;
+      if (bj) return sendJson(res, 409, { error: "sei già seduto a un tavolo di blackjack", code: bj, game: "bj" });
       if (room.fame && !(Number(body.fame) >= room.fame)) return sendJson(res, 403, { error: `Per questo tavolo serve fama ${room.fame}` });
       const buy = Math.floor(Number(body.buy));
       if (!(buy >= room.minBuy && buy <= room.maxBuy)) return sendJson(res, 400, { error: `Puoi portare da ${fmt(room.minBuy)} a ${fmt(room.maxBuy)}` });
@@ -687,6 +691,13 @@ module.exports = function pokerRoutes({ upstash, upstashPipeline, sendJson, isVa
     sendJson(res, 200, p ? { code: at, slot: p.slot, chips: p.chips } : { code: null });
   }
 
+  /** codice del tavolo di poker in cui siede (null se nessuno): serve al blackjack per un tavolo alla volta */
+  async function seatedCode(playerId) {
+    const at = await upstash(["GET", `hustle:poker:at:${playerId}`]);
+    const room = at ? await loadRoom(at) : null;
+    return room && !room.closed && room.seats.some((x) => x && x.id === playerId) ? at : null;
+  }
+
   return {
     routes: {
       "/hustle/poker/create": handleCreate,
@@ -699,8 +710,10 @@ module.exports = function pokerRoutes({ upstash, upstashPipeline, sendJson, isVa
       "/hustle/poker/claim": handleClaim,
       "/hustle/poker/where": handleWhere,
     },
+    seatedCode,
     // per le prove
     _test: { score5, best7, handName, rooms },
   };
 };
 module.exports.STAKES = STAKES;
+module.exports.STAKE_FAME = STAKE_FAME;
