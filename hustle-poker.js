@@ -19,8 +19,8 @@ const STAKES = [
   [10, 20], [100, 200], [1000, 2000], [10000, 20000], [100000, 200000], [1000000, 2000000], [10000000, 20000000], [100000000, 200000000],
 ];
 // fama totale che serve per sedersi a ogni tavolo (stesso ordine di STAKES): i primi due sono liberi,
-// poi circa ×2,5 a ogni tavolo (200 … 20000). La fama la manda il telefono.
-const STAKE_FAME = [0, 0, 200, 500, 1200, 3000, 8000, 20000];
+// poi circa ×2,5 a ogni tavolo (2000 … 200000). La fama la manda il telefono.
+const STAKE_FAME = [0, 0, 2000, 5000, 12000, 30000, 80000, 200000];
 const MAX_SEATS = 8;
 const MIN_BUY_BB = 20;
 const MAX_BUY_BB = 100;
