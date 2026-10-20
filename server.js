@@ -588,18 +588,20 @@ async function propRows() {
     .map((id, i) => {
       const votes = Object.entries(hashArrayToObject(rows[i * 2 + 1]))
         .map(([player, raw]) => ({ player, ...parseJson(raw, {}) }))
-        .filter((v) => v.v === "si" || v.v === "no")
         .sort((a, b) => (Number(b.t) || 0) - (Number(a.t) || 0));
-      return { id, row: hashArrayToObject(rows[i * 2]), votes };
+      // risposte alle domande di chiarimento di Claude: campo "note:<telefono>", una per telefono (si può cambiare)
+      const notes = votes.filter((v) => v.v === "nota" && v.player.startsWith("note:")).map((v) => ({ ...v, player: v.player.slice(5) }));
+      return { id, row: hashArrayToObject(rows[i * 2]), votes: votes.filter((v) => v.v === "si" || v.v === "no"), notes };
     })
     .filter((p) => p.row.status);
 }
 const voteOut = (v, me) => ({ name: v.n || "", vote: v.v, comment: v.c || "", at: Number(v.t) || 0, ...(me !== undefined ? { mine: v.player === me } : {}) });
+const noteOut = (v, me) => ({ name: v.n || "", comment: v.c || "", at: Number(v.t) || 0, ...(me !== undefined ? { mine: v.player === me } : {}) });
 
 async function handlePropList(res, body) {
   if (!isDevKey(body.key)) return sendJson(res, 403, { error: "solo lo sviluppatore" });
   // "player": inizio dell'id anonimo del telefono, per contare le proposte di ogni tester anche se cambia nome
-  const list = (await propRows()).map(({ id, row, votes }) => ({ ...propOut(id, row), player: String(row.player || "").slice(0, 12), votes: votes.map((v) => voteOut(v)) }));
+  const list = (await propRows()).map(({ id, row, votes, notes }) => ({ ...propOut(id, row), player: String(row.player || "").slice(0, 12), votes: votes.map((v) => voteOut(v)), notes: notes.map((v) => noteOut(v)) }));
   sendJson(res, 200, { proposals: list });
 }
 
@@ -610,10 +612,11 @@ async function handlePropBoard(res, body) {
   const me = isValidPlayerId(body.player_id) ? body.player_id : "";
   const list = (await propRows())
     .filter(({ row }) => row.status !== "nuova")
-    .map(({ id, row, votes }) => ({
+    .map(({ id, row, votes, notes }) => ({
       id: Number(id), status: row.status, text: row.text || "", nickname: row.nickname || "", created: Number(row.created) || 0,
       issue: Number(row.issue) || 0, mergeError: row.mergeError || "", player: sha256("hustle-tester:" + (row.player || "")).slice(0, 12),
       votes: votes.map((v) => voteOut(v, me)),
+      notes: notes.map((v) => noteOut(v, me)),
     }));
   sendJson(res, 200, { proposals: list });
 }
@@ -622,15 +625,19 @@ async function handlePropBoard(res, body) {
 async function handlePropVote(res, body) {
   if (!keyIs(body.key, PROP_TESTER_HASHES) && !isDevKey(body.key)) return sendJson(res, 403, { error: "chiave tester non valida" });
   if (!isValidPlayerId(body.player_id)) return sendJson(res, 400, { error: "telefono non valido" });
-  if (body.vote !== "si" && body.vote !== "no") return sendJson(res, 400, { error: "voto non valido" });
+  // "nota": risposta a una domanda di chiarimento di Claude (serve il testo), non è un voto
+  if (body.vote !== "si" && body.vote !== "no" && body.vote !== "nota") return sendJson(res, 400, { error: "voto non valido" });
+  const comment = cleanText(body.comment, PROP_MAX_COMMENT);
+  if (body.vote === "nota" && !comment) return sendJson(res, 400, { error: "scrivi la risposta" });
   const id = String(parseInt(body.id, 10));
   const key = `hustle:propvote:${id}`;
-  const [status, has, count] = await upstashPipeline([["HGET", `hustle:prop:${id}`, "status"], ["HEXISTS", key, body.player_id], ["HLEN", key]]);
+  const field = body.vote === "nota" ? `note:${body.player_id}` : body.player_id;
+  const [status, has, count] = await upstashPipeline([["HGET", `hustle:prop:${id}`, "status"], ["HEXISTS", key, field], ["HLEN", key]]);
   if (!status) return sendJson(res, 404, { error: "proposta non trovata" });
-  if (status !== "importata") return sendJson(res, 409, { error: "questa anteprima non si può più votare" });
+  if (status !== "importata") return sendJson(res, 409, { error: body.vote === "nota" ? "questa proposta non aspetta più risposte" : "questa anteprima non si può più votare" });
   if (!Number(has) && Number(count) >= PROP_MAX_VOTES) return sendJson(res, 429, { error: "troppi voti su questa anteprima" });
-  const vote = { n: cleanText(body.nickname, 40) || "Tester", v: body.vote, c: cleanText(body.comment, PROP_MAX_COMMENT), t: Date.now() };
-  await upstashPipeline([["HSET", key, body.player_id, JSON.stringify(vote)], ["EXPIRE", key, PROP_TTL]]);
+  const vote = { n: cleanText(body.nickname, 40) || "Tester", v: body.vote, c: comment, t: Date.now() };
+  await upstashPipeline([["HSET", key, field, JSON.stringify(vote)], ["EXPIRE", key, PROP_TTL]]);
   sendJson(res, 200, { ok: true });
 }
 
