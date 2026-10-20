@@ -3,7 +3,9 @@
 // Blackjack contro il banco, da 1 a 7 giocatori, con i soldi del gioco. Il banco è il server: sabot di 6 mazzi
 // (rimescolato quando ne resta un quarto), il mazziere si ferma su 17 anche morbido, blackjack pagato 3 a 2, il
 // mazziere controlla subito se ha blackjack (con asso o figura scoperti), raddoppio su due carte qualsiasi (anche dopo
-// aver diviso), divisione fino a 4 mani (assi divisi: una carta sola ciascuno), niente assicurazione.
+// aver diviso), divisione fino a 4 mani (assi divisi: una carta sola ciascuno). Con l'asso scoperto del banco, prima che
+// guardi la carta coperta, c'è l'assicurazione: costa metà della puntata e paga 2 a 1 se il banco ha blackjack (solo ai
+// telefoni col gioco aggiornato, che lo dicono con `ins: 1`; gli altri non la vedono e non aspettano).
 // Gli amici siedono allo stesso tavolo ma ognuno gioca contro il banco: i soldi non passano tra giocatori.
 //
 // Come il poker: chi entra compra le fiches (le toglie dal suo conto nel gioco); chi esce, o viene tolto perché non
@@ -29,6 +31,8 @@ const GONE_MS = Number(process.env.BJ_GONE_MS) || 45000;
 // dalla prima puntata, quanto aspettano gli altri per puntare
 const BET_MS = Number(process.env.BJ_BET_MS) || 15000;
 const NEXT_ROUND_MS = 5000;
+// tempo per decidere l'assicurazione (asso scoperto del banco)
+const INSURE_MS = Number(process.env.BJ_INSURE_MS) || 8000;
 // mani di fila senza puntare (con altri al tavolo) prima di non essere più aspettati
 const SKIPS_TO_SITOUT = 2;
 const WAIT_MUL = process.env.POKER_FAST ? 0.01 : 1;
@@ -138,6 +142,9 @@ module.exports = function blackjackRoutes({ upstash, upstashPipeline, sendJson, 
     for (const p of players(room)) {
       p.bet = 0;
       p.hands = [];
+      p.ins = 0;
+      p.insWin = 0;
+      p.insure = undefined;
     }
     bump(room, "");
   }
@@ -150,6 +157,8 @@ module.exports = function blackjackRoutes({ upstash, upstashPipeline, sendJson, 
     }
     room.round = (room.round || 0) + 1;
     for (const p of players(room)) {
+      p.ins = 0;
+      p.insure = undefined;
       if (p.bet > 0) {
         p.skips = 0;
         p.hands = [{ cards: [], bet: p.bet, done: false, doubled: false, fromAces: false, split: false, result: "", win: 0 }];
@@ -171,13 +180,39 @@ module.exports = function blackjackRoutes({ upstash, upstashPipeline, sendJson, 
     room.phase = "play";
     room.betDeadline = 0;
     for (const p of inRound) if (isBJ(p.hands[0].cards)) p.hands[0].done = true;
-    // il mazziere guarda la carta coperta con asso o figura scoperti: se ha blackjack la mano finisce subito
+    // asso scoperto: prima di guardare la carta coperta il banco offre l'assicurazione (a chi ha il gioco aggiornato)
+    const offer = inRound.filter((p) => p.insOk);
+    if (room.dealer[0][0] === "A" && offer.length) {
+      for (const p of offer) p.insure = null;
+      room.phase = "insure";
+      room.deadline = after(room, now) + INSURE_MS * WAIT_MUL;
+      bump(room, "Il banco ha un asso: assicurazione?");
+      return;
+    }
+    peek(room, now);
+  }
+
+  /** il mazziere guarda la carta coperta con asso o figura scoperti: se ha blackjack la mano finisce subito */
+  function peek(room, now) {
+    room.phase = "play";
+    room.deadline = 0;
     const up = room.dealer[0];
     if ((up[0] === "A" || cardValue(up) === 10) && isBJ(room.dealer)) {
       settle(room, now);
       return;
     }
+    // niente blackjack: chi si era assicurato perde l'assicurazione
+    const lost = players(room).filter((p) => p.ins > 0);
+    if (lost.length) bump(room, "Il banco non ha blackjack: assicurazione persa");
     nextTurn(room, now, -1);
+  }
+
+  /** tutti hanno deciso l'assicurazione (o il tempo è finito: chi non ha scelto non si assicura) */
+  function insureDone(room, now, force = false) {
+    const wait = players(room).filter((p) => p.insure === null);
+    if (wait.length && !force) return;
+    for (const p of wait) p.insure = false;
+    peek(room, now);
   }
 
   /** passa alla prossima mano da giocare (giocatore per giocatore, mano per mano); se non ce ne sono gioca il banco */
@@ -211,6 +246,13 @@ module.exports = function blackjackRoutes({ upstash, upstashPipeline, sendJson, 
     const lines = [];
     for (const p of players(room)) {
       let net = 0;
+      // assicurazione: pagata 2 a 1 se il banco ha blackjack (torna anche quella pagata), altrimenti persa
+      if (p.ins > 0) {
+        const back = dealerBJ ? p.ins * 3 : 0;
+        p.chips += back;
+        p.insWin = back;
+        net += back - p.ins;
+      }
       for (const h of p.hands) {
         const t = total(h.cards).t;
         const bj = isBJ(h.cards) && !h.split;
@@ -262,6 +304,22 @@ module.exports = function blackjackRoutes({ upstash, upstashPipeline, sendJson, 
       if (!room.betDeadline) room.betDeadline = now + BET_MS * WAIT_MUL;
       bump(room, `${p.name} punta ${fmt(amount)}`);
       if (waitedFor(room).every((x) => x.bet > 0)) deal(room, now);
+      return null;
+    }
+    if (a === "insure") {
+      if (room.phase !== "insure" || p.insure !== null) return "Adesso non puoi assicurarti";
+      if (body.take) {
+        const cost = Math.floor(p.hands[0].bet / 2);
+        if (cost > p.chips) return "Non hai abbastanza fiches per l'assicurazione";
+        p.chips -= cost;
+        p.ins = cost;
+        p.insure = true;
+        bump(room, `${p.name} si assicura (${fmt(cost)})`);
+      } else {
+        p.insure = false;
+        bump(room, "");
+      }
+      insureDone(room, now);
       return null;
     }
     if (room.phase !== "play" || room.toAct !== seat) return "Non tocca a te";
@@ -333,6 +391,7 @@ module.exports = function blackjackRoutes({ upstash, upstashPipeline, sendJson, 
     }
     if (room.phase === "play" && room.toAct === seat) nextTurn(room, now);
     else if (room.phase === "play" && !players(room).some((x) => x.hands.length)) settle(room, now);
+    else if (room.phase === "insure") insureDone(room, now);
     else if (room.phase === "bet" && betting(room).length && waitedFor(room).every((x) => x.bet > 0)) deal(room, now);
     return chips;
   }
@@ -344,6 +403,7 @@ module.exports = function blackjackRoutes({ upstash, upstashPipeline, sendJson, 
     }
     if (room.closed) return;
     if (room.phase === "bet" && room.betDeadline && now >= room.betDeadline && betting(room).length) deal(room, now);
+    else if (room.phase === "insure" && now > room.deadline) insureDone(room, now, true);
     else if (room.phase === "play" && room.toAct >= 0 && now > room.deadline) {
       const p = room.seats[room.toAct];
       p.missed = (p.missed || 0) + 1;
@@ -353,7 +413,7 @@ module.exports = function blackjackRoutes({ upstash, upstashPipeline, sendJson, 
 
   function view(room, me) {
     const now = Date.now();
-    const hidden = room.phase === "play";
+    const hidden = room.phase === "play" || room.phase === "insure";
     const dealerCards = room.dealer.map((c, i) => (hidden && i === 1 ? null : c));
     const shown = dealerCards.filter(Boolean);
     const mySeat = room.seats.findIndex((p) => p && p.id === me);
@@ -364,11 +424,11 @@ module.exports = function blackjackRoutes({ upstash, upstashPipeline, sendJson, 
       betMs: BET_MS * WAIT_MUL,
       dealer: { cards: dealerCards, total: shown.length ? total(shown).t : 0, soft: shown.length ? total(shown).soft && total(shown).t < 21 : false },
       seats: room.seats.map((p) => p && {
-        name: p.name, chips: p.chips, bet: p.bet, sitOut: !!p.sitOut, me: p.id === me,
+        name: p.name, chips: p.chips, bet: p.bet, sitOut: !!p.sitOut, me: p.id === me, ins: p.ins || 0, insWin: p.insWin || 0, insure: p.insure === undefined ? undefined : p.insure,
         hands: p.hands.map((h) => { const t = total(h.cards); return { cards: h.cards, bet: h.bet, total: t.t, soft: t.soft && t.t < 21, done: h.done, doubled: h.doubled, bj: isBJ(h.cards) && !h.split, result: h.result, win: h.win }; }),
       }),
       mySeat, toAct: room.toAct, hand: room.hand,
-      turnLeft: room.phase === "play" && room.toAct >= 0 ? Math.max(0, room.deadline - now) : 0, turnMs: TURN_MS,
+      turnLeft: (room.phase === "play" && room.toAct >= 0) || room.phase === "insure" ? Math.max(0, room.deadline - now) : 0, turnMs: room.phase === "insure" ? INSURE_MS * WAIT_MUL : TURN_MS,
       result: room.result, nextIn: room.phase === "done" ? Math.max(0, room.nextAt - now) : 0,
       log: room.log.slice(-6).map((l) => l.text),
     };
@@ -408,7 +468,7 @@ module.exports = function blackjackRoutes({ upstash, upstashPipeline, sendJson, 
   function seatPlayer(room, body, buy, now) {
     const free = room.seats.findIndex((s) => !s);
     if (free < 0) return -1;
-    room.seats[free] = { id: body.player_id, name: cleanName(body.nickname), slot: body.slot, chips: buy, bet: 0, hands: [], lastSeen: now, missed: 0, skips: 0, sitOut: false };
+    room.seats[free] = { id: body.player_id, name: cleanName(body.nickname), slot: body.slot, chips: buy, bet: 0, hands: [], lastSeen: now, missed: 0, skips: 0, sitOut: false, insOk: !!body.ins };
     bump(room, `${room.seats[free].name} si siede al tavolo`);
     return free;
   }
@@ -474,6 +534,7 @@ module.exports = function blackjackRoutes({ upstash, upstashPipeline, sendJson, 
       const mine = room.seats.find((p) => p && p.id === body.player_id);
       if (mine) {
         mine.lastSeen = now;
+        if (body.ins) mine.insOk = true;
         return sendJson(res, 200, { ok: true, code, bought: 0, rejoined: true, state: view(room, body.player_id) });
       }
       if (!validSlot(body.slot)) return sendJson(res, 400, { error: "partita non valida" });
@@ -499,6 +560,7 @@ module.exports = function blackjackRoutes({ upstash, upstashPipeline, sendJson, 
       const me = room.seats.find((p) => p && p.id === body.player_id);
       if (!me) return sendJson(res, 200, { closed: "Non sei più seduto a questo tavolo." });
       me.lastSeen = now;
+      if (body.ins) me.insOk = true;
       const v = room.v;
       await tick(room, now);
       if (room.closed) {
@@ -506,7 +568,7 @@ module.exports = function blackjackRoutes({ upstash, upstashPipeline, sendJson, 
         return sendJson(res, 200, { closed: room.closed });
       }
       if (room.v !== v) await saveRoom(room);
-      if (body.v === room.v) return sendJson(res, 200, { same: true, v: room.v, turnLeft: room.phase === "play" && room.toAct >= 0 ? Math.max(0, room.deadline - now) : 0, betLeft: room.phase === "bet" && room.betDeadline ? Math.max(0, room.betDeadline - now) : 0 });
+      if (body.v === room.v) return sendJson(res, 200, { same: true, v: room.v, turnLeft: (room.phase === "play" && room.toAct >= 0) || room.phase === "insure" ? Math.max(0, room.deadline - now) : 0, betLeft: room.phase === "bet" && room.betDeadline ? Math.max(0, room.betDeadline - now) : 0 });
       sendJson(res, 200, view(room, body.player_id));
     });
   }
@@ -521,6 +583,7 @@ module.exports = function blackjackRoutes({ upstash, upstashPipeline, sendJson, 
       if (seat < 0) return sendJson(res, 403, { error: "Non sei seduto a questo tavolo" });
       const now = Date.now();
       room.seats[seat].lastSeen = now;
+      if (body.ins) room.seats[seat].insOk = true;
       await tick(room, now);
       if (room.closed) {
         await saveRoom(room);
