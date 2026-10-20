@@ -31,6 +31,8 @@ const NEXT_HAND_FOLD_MS = 3000;
 const MISSED_TO_SITOUT = 2;
 // solo per le prove automatiche: pause tra le mani più corte
 const WAIT_MUL = process.env.POKER_FAST ? 0.01 : 1;
+// il mazziere dà le carte una alla volta (anche sul telefono): tempo per ogni carta, che si aggiunge al turno
+const DEAL_MS = 450 * WAIT_MUL;
 const POKER_ROOM_TTL = String(6 * 60 * 60);
 const CASH_TTL = String(90 * 24 * 60 * 60);
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -84,6 +86,11 @@ module.exports = function pokerRoutes({ upstash, upstashPipeline, sendJson, isVa
     }
   };
   const fmt = (n) => "€" + Math.round(n).toLocaleString("it-IT");
+  /** carte date ora: il telefono le mostra una alla volta, quindi turni e mano dopo partono quando ha finito */
+  const dealt = (room, now, cards) => {
+    room.anim = Math.max(room.anim || 0, now) + cards * DEAL_MS;
+  };
+  const after = (room, now) => Math.max(now, room.anim || 0);
 
   // ---------------- carte e punti ----------------
 
@@ -187,6 +194,7 @@ module.exports = function pokerRoutes({ upstash, upstashPipeline, sendJson, isVa
     post(pb, room.bb);
     pb.last = "grande buio";
     for (const p of players(room)) if (p.inHand) p.cards = [deck.pop(), deck.pop()];
+    dealt(room, now, 2 * players(room).filter((p) => p.inHand).length);
     bump(room, `Nuova mano: buio ${fmt(room.sb)} da ${ps.name}, ${fmt(room.bb)} da ${pb.name}`);
     setTurn(room, nextSeat(room, bb, canAct), now);
     // tutti già all-in con i bui (o uno solo può agire e ha già pareggiato): si girano le carte
@@ -196,7 +204,7 @@ module.exports = function pokerRoutes({ upstash, upstashPipeline, sendJson, isVa
 
   function setTurn(room, seat, now) {
     room.hand.toAct = seat;
-    room.hand.deadline = seat >= 0 ? now + TURN_MS : 0;
+    room.hand.deadline = seat >= 0 ? after(room, now) + TURN_MS : 0;
   }
 
   function roundOver(room) {
@@ -230,6 +238,7 @@ module.exports = function pokerRoutes({ upstash, upstashPipeline, sendJson, isVa
     const deal = (n) => {
       h.deck.pop(); // carta bruciata
       for (let i = 0; i < n; i++) h.board.push(h.deck.pop());
+      dealt(room, now, n);
     };
     const order = ["preflop", "flop", "turn", "river"];
     const more = players(room).filter(canAct).length >= 2;
@@ -305,7 +314,7 @@ module.exports = function pokerRoutes({ upstash, upstashPipeline, sendJson, isVa
       p.bet = 0;
       p.total = 0;
     }
-    room.nextHandAt = now + wait * WAIT_MUL;
+    room.nextHandAt = after(room, now) + wait * WAIT_MUL;
   }
 
   // ---------------- giocatori ----------------
@@ -443,7 +452,7 @@ module.exports = function pokerRoutes({ upstash, upstashPipeline, sendJson, isVa
       };
     });
     const out = {
-      code: room.code, v: room.v, sb: room.sb, bb: room.bb, minBuy: room.minBuy, maxBuy: room.maxBuy, seats, mySeat,
+      code: room.code, v: room.v, handId: h ? h.id : 0, sb: room.sb, bb: room.bb, minBuy: room.minBuy, maxBuy: room.maxBuy, seats, mySeat,
       button: room.button, board: h ? (running ? h.board : res ? res.board : []) : [], street: h ? h.street : "wait",
       pot: running ? players(room).reduce((a, p) => a + p.total, 0) + (h.dead || 0) : 0,
       toAct: running ? h.toAct : -1, turnLeft: running && h.toAct >= 0 ? Math.max(0, h.deadline - Date.now()) : 0, turnMs: TURN_MS,
@@ -509,7 +518,7 @@ module.exports = function pokerRoutes({ upstash, upstashPipeline, sendJson, isVa
     if (!validSlot(body.slot)) return sendJson(res, 400, { error: "partita non valida" });
     const [sb, bb] = stake;
     const fame = STAKE_FAME[body.stake];
-    if (!(Number(body.fame) >= fame)) return sendJson(res, 403, { error: `Per questo tavolo serve fama ${fame}` });
+    if (fame && !(Number(body.fame) >= fame)) return sendJson(res, 403, { error: `Per questo tavolo serve fama ${fame}` });
     const buy = Math.floor(Number(body.buy));
     if (!(buy >= bb * MIN_BUY_BB && buy <= bb * MAX_BUY_BB)) return sendJson(res, 400, { error: "fiches non valide" });
     const at = await upstash(["GET", `hustle:poker:at:${body.player_id}`]);

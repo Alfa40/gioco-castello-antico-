@@ -32,6 +32,8 @@ const NEXT_ROUND_MS = 5000;
 // mani di fila senza puntare (con altri al tavolo) prima di non essere più aspettati
 const SKIPS_TO_SITOUT = 2;
 const WAIT_MUL = process.env.POKER_FAST ? 0.01 : 1;
+// il mazziere dà le carte una alla volta (anche sul telefono): tempo per ogni carta, che si aggiunge al turno
+const DEAL_MS = 450 * WAIT_MUL;
 const ROOM_TTL = String(6 * 60 * 60);
 const CASH_TTL = String(90 * 24 * 60 * 60);
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -82,6 +84,11 @@ module.exports = function blackjackRoutes({ upstash, upstashPipeline, sendJson, 
     }
   };
   const fmt = (n) => "€" + Math.round(n).toLocaleString("it-IT");
+  /** carte date (o girate) ora: il telefono le mostra una alla volta; turni e mano dopo partono quando ha finito */
+  const dealt = (room, now, cards) => {
+    room.anim = Math.max(room.anim || 0, now) + cards * DEAL_MS;
+  };
+  const after = (room, now) => Math.max(now, room.anim || 0);
 
   // ---------------- carte e punti ----------------
 
@@ -160,6 +167,7 @@ module.exports = function blackjackRoutes({ upstash, upstashPipeline, sendJson, 
       for (const p of inRound) p.hands[0].cards.push(draw(room));
       room.dealer.push(draw(room));
     }
+    dealt(room, now, 2 * inRound.length + 2);
     room.phase = "play";
     room.betDeadline = 0;
     for (const p of inRound) if (isBJ(p.hands[0].cards)) p.hands[0].done = true;
@@ -181,7 +189,7 @@ module.exports = function blackjackRoutes({ upstash, upstashPipeline, sendJson, 
       if (h >= 0) {
         room.toAct = i;
         room.hand = h;
-        room.deadline = now + TURN_MS;
+        room.deadline = after(room, now) + TURN_MS;
         bump(room, "");
         return;
       }
@@ -195,7 +203,10 @@ module.exports = function blackjackRoutes({ upstash, upstashPipeline, sendJson, 
     const live = players(room).some((p) => p.hands.some((h) => total(h.cards).t <= 21 && !(isBJ(h.cards) && !h.split)));
     const dealerBJ = isBJ(room.dealer);
     // il banco tira fino a 17 (si ferma anche su 17 morbido), solo se qualcuno può ancora battere il banco
+    const had = room.dealer.length;
     if (live && !dealerBJ) while (total(room.dealer).t < 17) room.dealer.push(draw(room));
+    // si gira la carta coperta del banco, poi le sue carte una alla volta
+    dealt(room, now, 1 + room.dealer.length - had);
     const d = total(room.dealer).t;
     const lines = [];
     for (const p of players(room)) {
@@ -230,7 +241,7 @@ module.exports = function blackjackRoutes({ upstash, upstashPipeline, sendJson, 
     room.toAct = -1;
     room.hand = -1;
     room.deadline = 0;
-    room.nextAt = now + NEXT_ROUND_MS * WAIT_MUL;
+    room.nextAt = after(room, now) + NEXT_ROUND_MS * WAIT_MUL;
     bump(room, dealerBJ ? "Il banco ha blackjack" : d > 21 ? `Il banco sballa (${d})` : `Il banco fa ${d}`);
   }
 
@@ -258,6 +269,7 @@ module.exports = function blackjackRoutes({ upstash, upstashPipeline, sendJson, 
     if (!auto) p.missed = 0;
     if (a === "hit") {
       h.cards.push(draw(room));
+      dealt(room, now, 1);
       if (total(h.cards).t >= 21) h.done = true;
     } else if (a === "stand") h.done = true;
     else if (a === "double") {
@@ -267,6 +279,7 @@ module.exports = function blackjackRoutes({ upstash, upstashPipeline, sendJson, 
       h.bet *= 2;
       h.doubled = true;
       h.cards.push(draw(room));
+      dealt(room, now, 1);
       h.done = true;
     } else if (a === "split") {
       if (h.cards.length !== 2 || cardValue(h.cards[0]) !== cardValue(h.cards[1])) return "Puoi dividere solo due carte dello stesso valore";
@@ -280,13 +293,14 @@ module.exports = function blackjackRoutes({ upstash, upstashPipeline, sendJson, 
       h.fromAces = aces;
       h.cards.push(draw(room));
       second.cards.push(draw(room));
+      dealt(room, now, 2);
       p.hands.splice(room.hand + 1, 0, second);
       // assi divisi: una carta sola ciascuno; 21 su due carte dopo una divisione non è blackjack ma si ferma lì
       for (const x of [h, second]) if (aces || total(x.cards).t === 21) x.done = true;
     } else return "Azione non valida";
     bump(room, auto ? `${p.name} non risponde: sta` : "");
     if (h.done || p.hands[room.hand].done) nextTurn(room, now);
-    else room.deadline = now + TURN_MS;
+    else room.deadline = after(room, now) + TURN_MS;
     return null;
   }
 
@@ -344,7 +358,7 @@ module.exports = function blackjackRoutes({ upstash, upstashPipeline, sendJson, 
     const shown = dealerCards.filter(Boolean);
     const mySeat = room.seats.findIndex((p) => p && p.id === me);
     const v = {
-      code: room.code, v: room.v, min: room.min, max: room.max, minBuy: room.minBuy, maxBuy: room.maxBuy, fame: room.fame || 0,
+      code: room.code, v: room.v, round: room.round || 0, min: room.min, max: room.max, minBuy: room.minBuy, maxBuy: room.maxBuy, fame: room.fame || 0,
       phase: room.phase,
       betLeft: room.phase === "bet" && room.betDeadline ? Math.max(0, room.betDeadline - now) : 0,
       betMs: BET_MS * WAIT_MUL,
@@ -425,7 +439,7 @@ module.exports = function blackjackRoutes({ upstash, upstashPipeline, sendJson, 
     if (!stake) return sendJson(res, 400, { error: "tavolo non valido" });
     if (!validSlot(body.slot)) return sendJson(res, 400, { error: "partita non valida" });
     const fame = STAKE_FAME[body.stake];
-    if (!(Number(body.fame) >= fame)) return sendJson(res, 403, { error: `Per questo tavolo serve fama ${fame}` });
+    if (fame && !(Number(body.fame) >= fame)) return sendJson(res, 403, { error: `Per questo tavolo serve fama ${fame}` });
     const min = stake[1];
     const buy = Math.floor(Number(body.buy));
     if (!(buy >= min * MIN_BUY_X && buy <= min * MAX_BUY_X)) return sendJson(res, 400, { error: "fiches non valide" });
