@@ -30,7 +30,8 @@ const TURN_MS = Number(process.env.BJ_TURN_MS) || 20000;
 const GONE_MS = Number(process.env.BJ_GONE_MS) || 45000;
 // dalla prima puntata, quanto aspettano gli altri per puntare
 const BET_MS = Number(process.env.BJ_BET_MS) || 15000;
-const NEXT_ROUND_MS = 5000;
+// pausa dopo il pagamento prima della mano dopo (proposta #9: era 5 s, dimezzata)
+const NEXT_ROUND_MS = 2500;
 // tempo per decidere l'assicurazione (asso scoperto del banco)
 const INSURE_MS = Number(process.env.BJ_INSURE_MS) || 8000;
 // mani di fila senza puntare (con altri al tavolo) prima di non essere più aspettati
