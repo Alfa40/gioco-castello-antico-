@@ -645,6 +645,8 @@ async function handlePropVote(res, body) {
   if (!Number(has) && Number(count) >= PROP_MAX_VOTES) return sendJson(res, 429, { error: "troppi voti su questa anteprima" });
   const vote = { n: cleanText(body.nickname, 40) || "Tester", v: body.vote, c: comment, t: Date.now() };
   await upstashPipeline([["HSET", key, field, JSON.stringify(vote)], ["EXPIRE", key, PROP_TTL]]);
+  // risposta a un chiarimento: il robot la passa subito a Claude
+  if (body.vote === "nota") wakeRobot();
   sendJson(res, 200, { ok: true });
 }
 
@@ -776,7 +778,25 @@ async function handlePropToChange(res, body) {
   const list = ids.map((id, i) => ({ id: Number(id), row: hashArrayToObject(rows[i]) }))
     .filter((x) => x.row.status === "importata" && x.row.change)
     .map((x) => ({ id: x.id, issue: Number(x.row.issue) || 0, text: x.row.change, at: Number(x.row.changeAt) || 0 }));
-  sendJson(res, 200, { proposals: list, wake: !!GH_DISPATCH_TOKEN });
+  // risposte alle domande di chiarimento arrivate dopo l'ultima volta che il robot le ha passate a Claude
+  const answers = (await propRows())
+    .filter(({ row, notes }) => row.status === "importata" && notes.length && Math.max(...notes.map((n) => Number(n.t) || 0)) > (Number(row.answerSent) || 0))
+    .map(({ id, row, notes }) => ({
+      id: Number(id),
+      issue: Number(row.issue) || 0,
+      text: notes.slice().reverse().map((n) => `${n.n || "Tester"}: ${n.c}`).join("\n\n"),
+      at: Math.max(...notes.map((n) => Number(n.t) || 0)),
+    }));
+  sendJson(res, 200, { proposals: list, answers, wake: !!GH_DISPATCH_TOKEN });
+}
+
+// robot di GitHub: risposte al chiarimento passate a Claude (fino a quella delle `at`; le più nuove restano da passare)
+async function handlePropAnswered(res, body) {
+  if (!keyIs(body.key, [PROP_ROBOT_HASH])) return sendJson(res, 403, { error: "chiave non valida" });
+  const id = String(parseInt(body.id, 10));
+  const at = Number(body.at) || 0;
+  if (at > 0) await upstash(["HSET", `hustle:prop:${id}`, "answerSent", String(at)]);
+  sendJson(res, 200, { ok: true });
 }
 
 async function handlePropChanged(res, body) {
@@ -844,6 +864,7 @@ const PROP_ROUTES = {
   "/hustle/proposals/merged": handlePropMerged,
   "/hustle/proposals/tochange": handlePropToChange,
   "/hustle/proposals/changed": handlePropChanged,
+  "/hustle/proposals/answered": handlePropAnswered,
 };
 
 // poker multigiocatore di Hustle Idle (hustle-poker.js): stesse regole di invio delle proposte
