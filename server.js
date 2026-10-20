@@ -456,6 +456,10 @@ function readBody(req, max = 60000) {
 //   - HASH "hustle:prop:<id>": status (nuova|approvata|scartata|importata|rifiutata|accettata|pubblicata), text, why,
 //     where, ctx, nickname, player, created, decided, issue, photo ("1" se c'è la foto), mergeError (unione non riuscita).
 //   - STRING "hustle:propimg:<id>": foto dello schermo (data URL JPEG).
+//   - STRING "hustle:propvid:<id>": video (data URL mp4/webm, già rimpicciolito dal telefono) e
+//     "hustle:propframes:<id>": 4 fotogrammi del video in una sola foto (per Claude, che i video non li vede).
+//     Campi del hash: video ("mp4"|"webm"|"scaduto"), frames ("1"). Si tengono solo gli ultimi PROP_VIDEO_KEEP
+//     (ZSET "hustle:propvids"): sono pesanti e il database è condiviso.
 //   - ZSET "hustle:props": tutte le proposte (score = data di invio), le ultime PROP_KEEP.
 //   - SET "hustle:props:approved": approvate in attesa di diventare issue.
 //   - SET "hustle:props:toclose": rifiutate dopo l'anteprima, la cui issue il robot deve chiudere.
@@ -469,6 +473,10 @@ const PROP_DEV_HASH = "c9973361080da099481708145340d318dc2f5bb1b66009b5207ed4b7a
 const PROP_ROBOT_HASH = "deb0fcb441319a779d444716293ac17896df82bde703b06b2feb847bec0e0d3c";
 const PROP_MAX_TEXT = 2000;
 const PROP_MAX_PHOTO = 400000;
+const PROP_MAX_VIDEO = 3500000;
+const PROP_MAX_FRAMES = 250000;
+const PROP_VIDEO_KEEP = 20;
+const PROP_VIDEO_TTL = String(60 * 24 * 60 * 60);
 const PROP_PER_DAY = 15;
 const PROP_ALL_PER_DAY = 200;
 const PROP_KEEP = 300;
@@ -516,6 +524,8 @@ function propOut(id, row) {
     decided: Number(row.decided) || 0,
     issue: Number(row.issue) || 0,
     photo: row.photo === "1",
+    video: row.video || "",
+    frames: row.frames === "1",
     mergeError: row.mergeError || "",
   };
 }
@@ -527,6 +537,10 @@ async function handlePropSend(res, body) {
   const player = isValidPlayerId(body.player_id) ? body.player_id : "anonimo";
   const photo =
     typeof body.photo === "string" && body.photo.length <= PROP_MAX_PHOTO && /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(body.photo) ? body.photo : "";
+  const vm = typeof body.video === "string" && body.video.length <= PROP_MAX_VIDEO && /^data:video\/(mp4|webm);base64,[A-Za-z0-9+/=]+$/.exec(body.video);
+  const video = vm ? body.video : "";
+  const frames =
+    video && typeof body.frames === "string" && body.frames.length <= PROP_MAX_FRAMES && /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(body.frames) ? body.frames : "";
   const dayKey = new Date().toISOString().slice(0, 10);
   const [mine, all] = await upstashPipeline([
     ["INCR", `hustle:proprate:${player}:${dayKey}`],
@@ -539,16 +553,28 @@ async function handlePropSend(res, body) {
   const now = Date.now();
   const cmds = [
     ["HSET", `hustle:prop:${id}`, "status", "nuova", "text", text, "why", cleanText(body.why), "where", cleanText(body.where, 200),
-      "ctx", cleanCtx(body.ctx), "nickname", sanitizeNickname(body.nickname) || "Tester", "player", player, "created", String(now), "photo", photo ? "1" : "0"],
+      "ctx", cleanCtx(body.ctx), "nickname", sanitizeNickname(body.nickname) || "Tester", "player", player, "created", String(now), "photo", photo ? "1" : "0",
+      "video", vm ? vm[1] : "", "frames", frames ? "1" : "0"],
     ["EXPIRE", `hustle:prop:${id}`, PROP_TTL],
     ["ZADD", "hustle:props", String(now), id],
   ];
   if (photo) cmds.push(["SET", `hustle:propimg:${id}`, photo, "EX", PROP_TTL]);
+  if (video) {
+    cmds.push(["SET", `hustle:propvid:${id}`, video, "EX", PROP_VIDEO_TTL], ["ZADD", "hustle:propvids", String(now), id]);
+    if (frames) cmds.push(["SET", `hustle:propframes:${id}`, frames, "EX", PROP_VIDEO_TTL]);
+  }
   await upstashPipeline(cmds);
+  // video: solo gli ultimi PROP_VIDEO_KEEP (quelli prima restano proposte, senza video)
+  if (video) {
+    const oldVid = await upstash(["ZRANGE", "hustle:propvids", "0", String(-PROP_VIDEO_KEEP - 1)]);
+    if (Array.isArray(oldVid) && oldVid.length) {
+      await upstashPipeline([["ZREM", "hustle:propvids", ...oldVid], ...oldVid.flatMap((o) => [["DEL", `hustle:propvid:${o}`], ["DEL", `hustle:propframes:${o}`], ["HSET", `hustle:prop:${o}`, "video", "scaduto", "frames", "0"]])]);
+    }
+  }
   // tiene solo le ultime PROP_KEEP (le più vecchie si cancellano)
   const old = await upstash(["ZRANGE", "hustle:props", "0", String(-PROP_KEEP - 1)]);
   if (Array.isArray(old) && old.length) {
-    await upstashPipeline([["ZREM", "hustle:props", ...old], ["SREM", "hustle:props:approved", ...old], ["SREM", "hustle:props:toclose", ...old], ["SREM", "hustle:props:tomerge", ...old], ...old.flatMap((o) => [["DEL", `hustle:prop:${o}`], ["DEL", `hustle:propimg:${o}`], ["DEL", `hustle:propvote:${o}`]])]);
+    await upstashPipeline([["ZREM", "hustle:props", ...old], ["SREM", "hustle:props:approved", ...old], ["SREM", "hustle:props:toclose", ...old], ["SREM", "hustle:props:tomerge", ...old], ...old.flatMap((o) => [["DEL", `hustle:prop:${o}`], ["DEL", `hustle:propimg:${o}`], ["DEL", `hustle:propvid:${o}`], ["DEL", `hustle:propframes:${o}`], ["DEL", `hustle:propvote:${o}`]])]);
   }
   sendJson(res, 200, { ok: true, id: Number(id) });
 }
@@ -702,15 +728,33 @@ async function handlePropMerged(res, body) {
   sendJson(res, 200, { ok: true });
 }
 
-// foto della proposta: pubblica solo dopo l'approvazione (serve nella issue), prima solo con la chiave developer
-async function handlePropPhoto(res, url, id) {
+// foto, video e fotogrammi della proposta: pubblici solo dopo l'approvazione (servono nella issue), prima solo
+// con la chiave developer. I video rispondono anche a "Range" (Safari non li fa partire senza).
+const PROP_MEDIA = { photo: ["propimg", "image/jpeg"], frames: ["propframes", "image/jpeg"], mp4: ["propvid", "video/mp4"], webm: ["propvid", "video/webm"] };
+async function handlePropPhoto(req, res, url, id, kind = "photo") {
+  const [key, type] = PROP_MEDIA[kind];
   const status = await upstash(["HGET", `hustle:prop:${id}`, "status"]);
   const open = ["approvata", "importata", "accettata", "pubblicata"].includes(status);
   if (!status || (!open && !isDevKey(url.searchParams.get("k")))) return sendJson(res, 404, { error: "non trovata" });
-  const data = await upstash(["GET", `hustle:propimg:${id}`]);
-  if (typeof data !== "string" || !data.startsWith("data:image/jpeg;base64,")) return sendJson(res, 404, { error: "non trovata" });
-  const buf = Buffer.from(data.slice(23), "base64");
-  res.writeHead(200, { "Content-Type": "image/jpeg", "Cache-Control": open ? "public, max-age=86400" : "private, no-store", ...corsHeaders() });
+  const data = await upstash(["GET", `hustle:${key}:${id}`]);
+  const head = `data:${type};base64,`;
+  if (typeof data !== "string" || !data.startsWith(head)) return sendJson(res, 404, { error: "non trovata" });
+  const buf = Buffer.from(data.slice(head.length), "base64");
+  const hdr = { "Content-Type": type, "Accept-Ranges": "bytes", "Cache-Control": open ? "public, max-age=86400" : "private, no-store", ...corsHeaders() };
+  const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || "");
+  if (range && (range[1] || range[2])) {
+    let a = range[1] ? Number(range[1]) : buf.length - Number(range[2]);
+    let b = range[1] && range[2] ? Number(range[2]) : buf.length - 1;
+    a = Math.max(0, a);
+    b = Math.min(buf.length - 1, b);
+    if (a > b) {
+      res.writeHead(416, { "Content-Range": `bytes */${buf.length}`, ...corsHeaders() });
+      return res.end();
+    }
+    res.writeHead(206, { ...hdr, "Content-Range": `bytes ${a}-${b}/${buf.length}`, "Content-Length": b - a + 1 });
+    return res.end(buf.subarray(a, b + 1));
+  }
+  res.writeHead(200, { ...hdr, "Content-Length": buf.length });
   res.end(buf);
 }
 
@@ -754,7 +798,7 @@ const server = http.createServer((req, res) => {
 
   // proposte dei tester di Hustle Idle (corpo più grande: c'è la foto dello schermo) e poker
   if (req.method === "POST" && PROP_ROUTES[url.pathname]) {
-    readBody(req, 500000)
+    readBody(req, url.pathname === "/hustle/proposal" ? 4200000 : 500000)
       .then((raw) => {
         let body;
         try {
@@ -772,9 +816,10 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  const photo = req.method === "GET" && /^\/hustle\/proposal-photo\/(\d{1,9})\.jpg$/.exec(url.pathname);
-  if (photo) {
-    handlePropPhoto(res, url, photo[1]).catch((err) => {
+  const photo = req.method === "GET" && /^\/hustle\/proposal-(photo|frames|video)\/(\d{1,9})\.(jpg|mp4|webm)$/.exec(url.pathname);
+  const kind = photo && (photo[1] === "video" ? (photo[3] === "jpg" ? "" : photo[3]) : photo[3] === "jpg" ? photo[1] : "");
+  if (photo && kind) {
+    handlePropPhoto(req, res, url, photo[2], kind).catch((err) => {
       console.error(err);
       if (!res.headersSent) sendJson(res, 500, { error: "errore interno" });
     });
