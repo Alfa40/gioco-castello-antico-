@@ -610,8 +610,9 @@ async function handlePropList(res, body) {
   sendJson(res, 200, { proposals: list });
 }
 
-// app dei tester: le proposte già lette dallo sviluppatore (non le nuove), senza foto, perché e dettagli del
-// telefono; al posto dell'id del telefono un'impronta, per raggruppare le proposte di ogni tester
+// app dei tester: le proposte già lette dallo sviluppatore (non le nuove), senza foto né dettagli del telefono (perché
+// e posto ci sono: sono scritti anche nella proposta pubblica su GitHub); al posto dell'id del telefono un'impronta,
+// per raggruppare le proposte di ogni tester
 async function handlePropBoard(res, body) {
   if (!keyIs(body.key, PROP_TESTER_HASHES) && !isDevKey(body.key)) return sendJson(res, 403, { error: "chiave tester non valida" });
   const me = isValidPlayerId(body.player_id) ? body.player_id : "";
@@ -619,7 +620,8 @@ async function handlePropBoard(res, body) {
     .filter(({ row }) => row.status !== "nuova")
     .map(({ id, row, votes, notes }) => ({
       id: Number(id), status: row.status, text: row.text || "", nickname: row.nickname || "", created: Number(row.created) || 0,
-      issue: Number(row.issue) || 0, mergeError: row.mergeError || "", change: row.change || "", changeAt: Number(row.changeAt) || 0, player: sha256("hustle-tester:" + (row.player || "")).slice(0, 12),
+      issue: Number(row.issue) || 0, mergeError: row.mergeError || "", change: row.change || "", changeAt: Number(row.changeAt) || 0,
+      changeState: row.change ? (row.changeSent === "1" ? "inviata" : "attesa") : "", why: row.why || "", where: row.where || "", player: sha256("hustle-tester:" + (row.player || "")).slice(0, 12),
       votes: votes.map((v) => voteOut(v, me)),
       notes: notes.map((v) => noteOut(v, me)),
     }));
