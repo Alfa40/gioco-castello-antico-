@@ -646,6 +646,29 @@ async function handlePropVote(res, body) {
   sendJson(res, 200, { ok: true });
 }
 
+// sveglia subito il robot di GitHub (proposte.yml) quando lo sviluppatore decide qualcosa, invece di aspettare il
+// giro ogni 10 minuti. Serve GH_DISPATCH_TOKEN: token "fine-grained" solo per il repo del gioco con il solo permesso
+// Actions (lettura e scrittura). Più decisioni di fila partono insieme dopo qualche secondo.
+const GH_DISPATCH_TOKEN = process.env.GH_DISPATCH_TOKEN || "";
+const GAME_REPO = "Alfa40/hustle-idle";
+let robotTimer = null;
+function wakeRobot() {
+  if (!GH_DISPATCH_TOKEN || robotTimer) return;
+  robotTimer = setTimeout(async () => {
+    robotTimer = null;
+    try {
+      const r = await fetch(`https://api.github.com/repos/${GAME_REPO}/actions/workflows/proposte.yml/dispatches`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${GH_DISPATCH_TOKEN}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "hustle-server", "Content-Type": "application/json" },
+        body: JSON.stringify({ ref: "main" }),
+      });
+      if (!r.ok) console.error("robot di GitHub non svegliato:", r.status, (await r.text()).slice(0, 200));
+    } catch (e) {
+      console.error("robot di GitHub non svegliato:", e.message);
+    }
+  }, 8000);
+}
+
 async function handlePropDecide(res, body) {
   if (!isDevKey(body.key)) return sendJson(res, 403, { error: "solo lo sviluppatore" });
   const id = String(parseInt(body.id, 10));
@@ -662,6 +685,7 @@ async function handlePropDecide(res, body) {
       ["HSET", `hustle:prop:${id}`, "change", text, "changeAt", String(Date.now()), "changeSent", "0", "mergeError", ""],
       ["SADD", "hustle:props:tochange", id],
     ]);
+    wakeRobot();
     return sendJson(res, 200, { ok: true, status });
   }
   // anteprima provata e piaciuta: accettata; il robot di GitHub unisce la modifica al gioco e la pubblica
@@ -672,6 +696,7 @@ async function handlePropDecide(res, body) {
       ["HSET", `hustle:prop:${id}`, "status", "accettata", "decided", String(Date.now()), "mergeError", ""],
       ["SADD", "hustle:props:tomerge", id],
     ]);
+    wakeRobot();
     return sendJson(res, 200, { ok: true, status: "accettata" });
   }
   // anteprima provata e non piaciuta: rifiutata; il robot di GitHub chiude la issue
@@ -682,6 +707,7 @@ async function handlePropDecide(res, body) {
         ["SADD", "hustle:props:toclose", id],
         ["SREM", "hustle:props:tomerge", id],
       ]);
+      wakeRobot();
       return sendJson(res, 200, { ok: true, status: "rifiutata" });
     }
     if (status !== "approvata") return sendJson(res, 409, { error: "non è un'anteprima" });
@@ -694,6 +720,7 @@ async function handlePropDecide(res, body) {
     ["HSET", `hustle:prop:${id}`, "status", next, "decided", String(Date.now())],
     action === "approve" ? ["SADD", "hustle:props:approved", id] : ["SREM", "hustle:props:approved", id],
   ]);
+  if (action === "approve") wakeRobot();
   sendJson(res, 200, { ok: true, status: next });
 }
 
@@ -747,7 +774,7 @@ async function handlePropToChange(res, body) {
   const list = ids.map((id, i) => ({ id: Number(id), row: hashArrayToObject(rows[i]) }))
     .filter((x) => x.row.status === "importata" && x.row.change)
     .map((x) => ({ id: x.id, issue: Number(x.row.issue) || 0, text: x.row.change, at: Number(x.row.changeAt) || 0 }));
-  sendJson(res, 200, { proposals: list });
+  sendJson(res, 200, { proposals: list, wake: !!GH_DISPATCH_TOKEN });
 }
 
 async function handlePropChanged(res, body) {
