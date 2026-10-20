@@ -527,6 +527,11 @@ function propOut(id, row) {
     video: row.video || "",
     frames: row.frames === "1",
     mergeError: row.mergeError || "",
+    // modifiche chieste dallo sviluppatore dopo aver provato l'anteprima: testo, quando, e se il robot le ha già
+    // passate a Claude ("attesa" / "inviata")
+    change: row.change || "",
+    changeAt: Number(row.changeAt) || 0,
+    changeState: row.change ? (row.changeSent === "1" ? "inviata" : "attesa") : "",
   };
 }
 
@@ -614,7 +619,7 @@ async function handlePropBoard(res, body) {
     .filter(({ row }) => row.status !== "nuova")
     .map(({ id, row, votes, notes }) => ({
       id: Number(id), status: row.status, text: row.text || "", nickname: row.nickname || "", created: Number(row.created) || 0,
-      issue: Number(row.issue) || 0, mergeError: row.mergeError || "", player: sha256("hustle-tester:" + (row.player || "")).slice(0, 12),
+      issue: Number(row.issue) || 0, mergeError: row.mergeError || "", change: row.change || "", changeAt: Number(row.changeAt) || 0, player: sha256("hustle-tester:" + (row.player || "")).slice(0, 12),
       votes: votes.map((v) => voteOut(v, me)),
       notes: notes.map((v) => noteOut(v, me)),
     }));
@@ -645,9 +650,20 @@ async function handlePropDecide(res, body) {
   if (!isDevKey(body.key)) return sendJson(res, 403, { error: "solo lo sviluppatore" });
   const id = String(parseInt(body.id, 10));
   const action = body.action;
-  if (!["approve", "reject", "reopen", "reject_preview", "accept_preview"].includes(action)) return sendJson(res, 400, { error: "azione non valida" });
+  if (!["approve", "reject", "reopen", "reject_preview", "accept_preview", "request_changes"].includes(action)) return sendJson(res, 400, { error: "azione non valida" });
   const status = await upstash(["HGET", `hustle:prop:${id}`, "status"]);
   if (!status) return sendJson(res, 404, { error: "proposta non trovata" });
+  // anteprima provata, da cambiare: il robot di GitHub passa la richiesta a Claude, che aggiorna lo stesso ramo
+  if (action === "request_changes") {
+    if (status !== "importata") return sendJson(res, 409, { error: "non è un'anteprima da provare" });
+    const text = cleanText(body.text, PROP_MAX_TEXT);
+    if (text.length < 3) return sendJson(res, 400, { error: "scrivi cosa cambiare" });
+    await upstashPipeline([
+      ["HSET", `hustle:prop:${id}`, "change", text, "changeAt", String(Date.now()), "changeSent", "0", "mergeError", ""],
+      ["SADD", "hustle:props:tochange", id],
+    ]);
+    return sendJson(res, 200, { ok: true, status });
+  }
   // anteprima provata e piaciuta: accettata; il robot di GitHub unisce la modifica al gioco e la pubblica
   if (action === "accept_preview") {
     if (status === "accettata" || status === "pubblicata") return sendJson(res, 200, { ok: true, status });
@@ -723,6 +739,26 @@ async function handlePropToMerge(res, body) {
   sendJson(res, 200, { proposals: ids.map((id, i) => ({ id: Number(id), issue: Number(issues[i]) || 0 })) });
 }
 
+// robot di GitHub: modifiche chieste dallo sviluppatore da passare a Claude, e la conferma dopo averle passate
+async function handlePropToChange(res, body) {
+  if (!keyIs(body.key, [PROP_ROBOT_HASH])) return sendJson(res, 403, { error: "chiave non valida" });
+  const ids = ((await upstash(["SMEMBERS", "hustle:props:tochange"])) || []).slice(0, 10);
+  const rows = ids.length ? await upstashPipeline(ids.map((id) => ["HGETALL", `hustle:prop:${id}`])) : [];
+  const list = ids.map((id, i) => ({ id: Number(id), row: hashArrayToObject(rows[i]) }))
+    .filter((x) => x.row.status === "importata" && x.row.change)
+    .map((x) => ({ id: x.id, issue: Number(x.row.issue) || 0, text: x.row.change, at: Number(x.row.changeAt) || 0 }));
+  sendJson(res, 200, { proposals: list });
+}
+
+async function handlePropChanged(res, body) {
+  if (!keyIs(body.key, [PROP_ROBOT_HASH])) return sendJson(res, 403, { error: "chiave non valida" });
+  const id = String(parseInt(body.id, 10));
+  // solo se nel frattempo non ne è arrivata un'altra (quella resta da passare)
+  const at = await upstash(["HGET", `hustle:prop:${id}`, "changeAt"]);
+  if (String(body.at || "") === String(at || "")) await upstashPipeline([["SREM", "hustle:props:tochange", id], ["HSET", `hustle:prop:${id}`, "changeSent", "1"]]);
+  sendJson(res, 200, { ok: true });
+}
+
 async function handlePropMerged(res, body) {
   if (!keyIs(body.key, [PROP_ROBOT_HASH])) return sendJson(res, 403, { error: "chiave non valida" });
   const id = String(parseInt(body.id, 10));
@@ -777,6 +813,8 @@ const PROP_ROUTES = {
   "/hustle/proposals/closed": handlePropClosed,
   "/hustle/proposals/tomerge": handlePropToMerge,
   "/hustle/proposals/merged": handlePropMerged,
+  "/hustle/proposals/tochange": handlePropToChange,
+  "/hustle/proposals/changed": handlePropChanged,
 };
 
 // poker multigiocatore di Hustle Idle (hustle-poker.js): stesse regole di invio delle proposte
