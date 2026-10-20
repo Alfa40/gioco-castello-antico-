@@ -35,6 +35,9 @@ const WAIT_MUL = process.env.POKER_FAST ? 0.01 : 1;
 const DEAL_MS = 450 * WAIT_MUL;
 const POKER_ROOM_TTL = String(6 * 60 * 60);
 const CASH_TTL = String(90 * 24 * 60 * 60);
+// tavoli di prova (anteprime): i bot pensano un attimo prima di giocare
+const BOT_MS = 1200 * (process.env.POKER_FAST ? 0.01 : 1);
+const BOT_NAMES = ["Bot Bruno", "Bot Carla", "Bot Dario"];
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const RANKS = "23456789TJQKA";
 const SUITS = "shdc";
@@ -320,7 +323,9 @@ module.exports = function pokerRoutes({ upstash, upstashPipeline, sendJson, isVa
   // ---------------- giocatori ----------------
 
   async function cashOut(room, p, why) {
-    if (p.chips > 0) {
+    if (p.bot) return;
+    // tavolo di prova (anteprime): fiches finte, non diventano mai soldi da ritirare
+    if (p.chips > 0 && !room.practice) {
       const entry = JSON.stringify({ amount: p.chips, slot: p.slot, code: room.code, at: Date.now(), why });
       await upstashPipeline([["RPUSH", `hustle:poker:cash:${p.id}`, entry], ["EXPIRE", `hustle:poker:cash:${p.id}`, CASH_TTL]]);
     }
@@ -355,6 +360,14 @@ module.exports = function pokerRoutes({ upstash, upstashPipeline, sendJson, isVa
   // meno di 2 giocatori dopo che la partita è cominciata: la stanza chiude e chi resta ritira le fiches
   async function maybeClose(room) {
     if (room.closed) return;
+    // tavolo di prova: resta aperto finché c'è una persona (i bot non contano)
+    if (room.practice) {
+      if (players(room).some((p) => !p.bot)) return;
+      room.closed = "La stanza si è chiusa.";
+      closedInfo.set(room.code, { why: room.closed, at: Date.now(), ids: [] });
+      bump(room, "");
+      return;
+    }
     const left = players(room);
     if (left.length >= 2 || (!room.started && left.length === 1)) return;
     room.closed = left.length ? "Sei rimasto da solo al tavolo: la stanza si è chiusa." : "La stanza si è chiusa.";
@@ -370,6 +383,12 @@ module.exports = function pokerRoutes({ upstash, upstashPipeline, sendJson, isVa
 
   // il tempo che passa: turni scaduti, giocatori spariti, mano successiva
   async function tick(room, now) {
+    for (const p of players(room)) if (p.bot) {
+      p.lastSeen = now;
+      // il bot non resta mai senza fiches: tra una mano e l'altra ricompra
+      if (p.chips < room.minBuy && !(room.hand && room.hand.street !== "done" && p.inHand)) p.chips = room.maxBuy;
+    }
+    botTurns(room, now);
     // chi non chiede lo stato da troppo (app chiusa, niente rete) viene tolto e ritira le fiches
     for (let i = 0; i < MAX_SEATS && !room.closed; i++) {
       const p = room.seats[i];
@@ -385,6 +404,42 @@ module.exports = function pokerRoutes({ upstash, upstashPipeline, sendJson, isVa
       act(room, h.toAct, free ? { action: "check" } : { action: "fold" }, now, true);
     }
     if ((!room.hand || room.hand.street === "done") && now >= (room.nextHandAt || 0)) startHand(room, now);
+  }
+
+  // ---------------- bot dei tavoli di prova (anteprime) ----------------
+
+  // quanto è buona la mano del bot, da 0 a 1 (prima del flop: coppia e carte alte; dopo: la combinazione)
+  function botStrength(room, p) {
+    const h = room.hand;
+    const [a, b] = p.cards.map(rv);
+    if (h.board.length < 3) return Math.min(1, (a === b ? 0.5 + a / 28 : (Math.max(a, b) + Math.min(a, b) / 2) / 28) + (p.cards[0][1] === p.cards[1][1] ? 0.05 : 0));
+    const sc = best7(p.cards.concat(h.board));
+    return Math.min(1, sc.cat / 4 + (sc.cat === 0 ? sc.top / 40 : 0.15));
+  }
+
+  function botAct(room, seat, now) {
+    const h = room.hand;
+    const p = room.seats[seat];
+    const toCall = h.currentBet - p.bet;
+    const st = botStrength(room, p) + (Math.random() - 0.5) * 0.2;
+    const raise = (x) => act(room, seat, { action: "raise", amount: h.currentBet + Math.max(h.minRaise, Math.round(x / room.bb) * room.bb) }, now);
+    if (st > 0.75 && Math.random() < 0.5 && !raise(room.bb * (2 + Math.floor(Math.random() * 3)))) return;
+    if (toCall <= 0) {
+      if (st > 0.55 && Math.random() < 0.3 && !raise(room.bb * 2)) return;
+      act(room, seat, { action: "check" }, now);
+    } else if (st > 0.4 || toCall <= room.bb || (toCall <= p.chips / 6 && Math.random() < 0.4)) act(room, seat, { action: "call" }, now);
+    else act(room, seat, { action: "fold" }, now);
+  }
+
+  // i bot giocano un attimo dopo che tocca a loro (le carte appena date si vedono arrivare)
+  function botTurns(room, now) {
+    for (let k = 0; k < 20; k++) {
+      const h = room.hand;
+      if (!h || h.street === "done" || h.toAct < 0) return;
+      const p = room.seats[h.toAct];
+      if (!p || !p.bot || now < h.deadline - TURN_MS + BOT_MS) return;
+      botAct(room, h.toAct, now);
+    }
   }
 
   // ---------------- azioni ----------------
@@ -529,6 +584,15 @@ module.exports = function pokerRoutes({ upstash, upstashPipeline, sendJson, isVa
     const now = Date.now();
     const room = { code, v: 1, sb, bb, fame, minBuy: bb * MIN_BUY_BB, maxBuy: bb * MAX_BUY_BB, created: now, seats: Array(MAX_SEATS).fill(null), button: -1, hand: null, result: null, nextHandAt: 0, log: [], started: false, closed: null };
     seatPlayer(room, body, buy, now);
+    // tavolo di prova delle anteprime: fiches finte (niente da ritirare) e bot contro cui giocare
+    if (body.practice) {
+      room.practice = true;
+      const n = Math.min(3, Math.max(1, Math.floor(Number(body.bots)) || 1));
+      for (let i = 0; i < n; i++) {
+        const s = seatPlayer(room, { player_id: `bot${i}:${code}`, nickname: BOT_NAMES[i], slot: 0 }, room.maxBuy, now);
+        room.seats[s].bot = true;
+      }
+    }
     rooms.set(code, room);
     await saveRoom(room);
     await upstash(["SET", `hustle:poker:at:${body.player_id}`, code, "EX", POKER_ROOM_TTL]);

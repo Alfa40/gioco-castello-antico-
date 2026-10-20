@@ -42,6 +42,8 @@ const ROOM_TTL = String(6 * 60 * 60);
 const CASH_TTL = String(90 * 24 * 60 * 60);
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const RANKS = "23456789TJQKA";
+// trucchi dei tavoli di prova (anteprime): "asso-banco" = il banco mostra sempre un asso
+const BJ_TRICKS = ["asso-banco"];
 const SUITS = "shdc";
 
 module.exports = function blackjackRoutes({ upstash, upstashPipeline, sendJson, isValidPlayerId, cleanText, tables }) {
@@ -176,6 +178,8 @@ module.exports = function blackjackRoutes({ upstash, upstashPipeline, sendJson, 
       for (const p of inRound) p.hands[0].cards.push(draw(room));
       room.dealer.push(draw(room));
     }
+    // tavolo di prova con il trucco "asso-banco": il banco mostra sempre un asso (per provare l'assicurazione)
+    if (room.trick === "asso-banco") room.dealer[0] = "A" + room.dealer[0][1];
     dealt(room, now, 2 * inRound.length + 2);
     room.phase = "play";
     room.betDeadline = 0;
@@ -365,7 +369,8 @@ module.exports = function blackjackRoutes({ upstash, upstashPipeline, sendJson, 
   // ---------------- giocatori ----------------
 
   async function cashOut(room, p, why) {
-    if (p.chips > 0) {
+    // tavolo di prova (anteprime): fiches finte, non diventano mai soldi da ritirare
+    if (p.chips > 0 && !room.practice) {
       const entry = JSON.stringify({ amount: p.chips, slot: p.slot, code: room.code, at: Date.now(), why, game: "bj" });
       await upstashPipeline([["RPUSH", `hustle:poker:cash:${p.id}`, entry], ["EXPIRE", `hustle:poker:cash:${p.id}`, CASH_TTL]]);
     }
@@ -507,6 +512,11 @@ module.exports = function blackjackRoutes({ upstash, upstashPipeline, sendJson, 
     const code = await newCode();
     const now = Date.now();
     const room = { code, v: 1, min, max: min * MAX_BET_X, fame, minBuy: min * MIN_BUY_X, maxBuy: min * MAX_BUY_X, created: now, seats: Array(MAX_SEATS).fill(null), shoe: newShoe(), dealer: [], phase: "bet", betDeadline: 0, toAct: -1, hand: -1, deadline: 0, result: null, nextAt: 0, log: [], closed: null };
+    // tavolo di prova delle anteprime: fiches finte (niente da ritirare) ed eventuale trucco per provare subito una regola
+    if (body.practice) {
+      room.practice = true;
+      if (BJ_TRICKS.includes(body.trucco)) room.trick = body.trucco;
+    }
     seatPlayer(room, body, buy, now);
     rooms.set(code, room);
     await saveRoom(room);
