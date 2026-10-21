@@ -20,7 +20,9 @@
 //   - SET "hustle:req:<player_id>": codici di chi gli ha chiesto l'amicizia (in attesa).
 //   Proposte dei tester (chiavi "hustle:prop…"): vedi la sezione più sotto.
 //   Account senza progressi da più di 30 giorni ("updated" vecchio): nascosti dalle classifiche
-//   (i dati restano; tornando a giocare ricompaiono). Da più di 90 giorni: cancellati.
+//   (i dati restano; tornando a giocare ricompaiono). Da più di 90 giorni: cancellati (tranne chi
+//   ha creato l'account con la password).
+//   Nomi unici e account con le partite salvate (chiavi "hustle:name…", "hustle:acct…"): hustle-account.js.
 "use strict";
 
 const http = require("http");
@@ -259,6 +261,11 @@ async function handleSubmitHustle(res, body) {
   const title = sanitizeNickname(String(body.title || "")).slice(0, MAX_TITLE_LEN);
   if (!isValidPlayerId(playerId) || nickname.length === 0 || !Number.isFinite(fame) || !Number.isFinite(money) || fame < 0 || fame > MAX_FAME || money < 0) {
     sendJson(res, 400, { error: "dati non validi" });
+    return;
+  }
+  // un nome = un giocatore: se è di un altro, il gioco chiede di sceglierne un altro
+  if ((await account.nameForSubmit(playerId, nickname)) === "taken") {
+    sendJson(res, 409, { error: "nome già usato" });
     return;
   }
   const f = Math.round(fame * 10) / 10;
@@ -875,6 +882,9 @@ const blackjack = require("./hustle-blackjack")({ upstash, upstashPipeline, send
 casinoTables.poker = poker.seatedCode;
 casinoTables.bj = blackjack.seatedCode;
 Object.assign(PROP_ROUTES, poker.routes, blackjack.routes);
+// nomi unici e account (nome + password) con le partite salvate (hustle-account.js)
+const account = require("./hustle-account")({ upstash, upstashPipeline, sendJson, isValidPlayerId, sanitizeNickname });
+Object.assign(PROP_ROUTES, account.routes);
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
@@ -893,7 +903,7 @@ const server = http.createServer((req, res) => {
 
   // proposte dei tester di Hustle Idle (corpo più grande: c'è la foto dello schermo) e poker
   if (req.method === "POST" && PROP_ROUTES[url.pathname]) {
-    readBody(req, url.pathname === "/hustle/proposal" ? 4200000 : 500000)
+    readBody(req, url.pathname === "/hustle/proposal" ? 4200000 : url.pathname === "/hustle/account/save" ? account.MAX_SAVE_LEN + 2000 : 500000)
       .then((raw) => {
         let body;
         try {
@@ -1051,13 +1061,17 @@ const HUSTLE_DELETE_MS = 90 * 24 * 60 * 60 * 1000;
 async function cleanupHustleInactive() {
   if (!UPSTASH_URL || !UPSTASH_TOKEN) return;
   const now = Date.now();
-  const old = (await allHustlePlayers())
+  const stale = (await allHustlePlayers())
     .filter((p) => {
       const t = Number(p.row.updated);
       return Number.isFinite(t) && t > 0 && now - t > HUSTLE_DELETE_MS;
     })
     .map((p) => p.id);
+  // chi ha creato l'account (nome e password) non si cancella: le partite salvate restano
+  const keep = stale.length ? await upstashPipeline(stale.map((id) => ["EXISTS", `hustle:acct:${id}`])) : [];
+  const old = stale.filter((_, i) => !Number(keep[i]));
   await deleteHustlePlayers(old);
+  await account.releaseNames(old);
   if (old.length) console.log(`Hustle Idle: cancellati ${old.length} account inattivi da più di 90 giorni`);
 }
 
