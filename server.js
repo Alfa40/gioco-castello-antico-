@@ -1075,9 +1075,43 @@ async function cleanupHustleInactive() {
   if (old.length) console.log(`Hustle Idle: cancellati ${old.length} account inattivi da più di 90 giorni`);
 }
 
+// Reset di Hustle Idle (24/10/2026, arrivano i campi di carriera): una volta sola (chiave "hustle:reset:season2").
+// Classifiche azzerate, dati dei giocatori in classifica tolti (i codici amico restano: gli amici non si perdono),
+// partite salvate degli account cancellate (nome e password restano), vincite del casinò da ritirare tolte.
+// Solo chiavi "hustle:": mai quelle di The Magic Trip.
+async function scanHustle(pattern) {
+  const out = [];
+  let cursor = "0";
+  for (let i = 0; i < 1000; i++) {
+    const r = await upstash(["SCAN", cursor, "MATCH", pattern, "COUNT", "500"]);
+    if (!Array.isArray(r)) break;
+    cursor = String(r[0]);
+    for (const k of r[1] || []) if (typeof k === "string" && k.startsWith("hustle:")) out.push(k);
+    if (cursor === "0") break;
+  }
+  return out;
+}
+async function resetHustleSeason2() {
+  if (!UPSTASH_URL || !UPSTASH_TOKEN) return;
+  const first = await upstash(["SET", "hustle:reset:season2", String(Date.now()), "NX"]);
+  if (first !== "OK") return;
+  const ids = (await allHustlePlayers()).map((p) => p.id);
+  const cmds = Object.values(HUSTLE_KINDS).map((k) => ["DEL", k]);
+  for (const id of ids) cmds.push(["DEL", `hustle:player:${id}`], ["DEL", `hustle:seen:${id}`]);
+  const saves = await scanHustle("hustle:save:*");
+  for (const k of saves) {
+    cmds.push(["DEL", k]);
+    cmds.push(["HDEL", `hustle:acct:${k.slice("hustle:save:".length)}`, "savedAt"]);
+  }
+  for (const k of await scanHustle("hustle:poker:cash:*")) cmds.push(["DEL", k]);
+  for (let i = 0; i < cmds.length; i += 200) await upstashPipeline(cmds.slice(i, i + 200));
+  console.log(`Hustle Idle: reset fatto (${ids.length} giocatori tolti dalle classifiche, ${saves.length} partite salvate cancellate)`);
+}
+
 server.listen(PORT, () => {
   console.log(`Classifica globale in ascolto sulla porta ${PORT}`);
   cleanupHustleTesters().catch((err) => console.error("pulizia Tester:", err));
+  resetHustleSeason2().catch((err) => console.error("reset di Hustle Idle:", err));
   const inactive = () => cleanupHustleInactive().catch((err) => console.error("pulizia inattivi:", err));
   inactive();
   setInterval(inactive, 24 * 60 * 60 * 1000);
