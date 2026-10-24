@@ -1108,10 +1108,24 @@ async function resetHustleSeason2() {
   console.log(`Hustle Idle: reset fatto (${ids.length} giocatori tolti dalle classifiche, ${saves.length} partite salvate cancellate)`);
 }
 
+// Nuova stagione: anche gli account (nome + password) si cancellano, una volta sola. Restano i nomi scelti dai telefoni
+// (hustle:name / hustle:nameof) e i codici amico: si tolgono solo account, accessi e tentativi sbagliati.
+async function resetHustleAccounts2() {
+  if (!UPSTASH_URL || !UPSTASH_TOKEN) return;
+  const first = await upstash(["SET", "hustle:reset:accounts2", String(Date.now()), "NX"]);
+  if (first !== "OK") return;
+  const accts = await scanHustle("hustle:acct:*");
+  const keys = [...accts, ...(await scanHustle("hustle:sess:*")), ...(await scanHustle("hustle:loginfail:*")), ...(await scanHustle("hustle:save:*"))];
+  for (let i = 0; i < keys.length; i += 200) await upstashPipeline(keys.slice(i, i + 200).map((k) => ["DEL", k]));
+  console.log(`Hustle Idle: account cancellati (${accts.length})`);
+}
+
 server.listen(PORT, () => {
   console.log(`Classifica globale in ascolto sulla porta ${PORT}`);
   cleanupHustleTesters().catch((err) => console.error("pulizia Tester:", err));
-  resetHustleSeason2().catch((err) => console.error("reset di Hustle Idle:", err));
+  resetHustleSeason2()
+    .then(resetHustleAccounts2)
+    .catch((err) => console.error("reset di Hustle Idle:", err));
   const inactive = () => cleanupHustleInactive().catch((err) => console.error("pulizia inattivi:", err));
   inactive();
   setInterval(inactive, 24 * 60 * 60 * 1000);
